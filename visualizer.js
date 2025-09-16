@@ -186,6 +186,7 @@ const gbfsLoader = new GBFSLoader();
 let allZones = [];
 let stationData = [];
 let vehicleData = [];
+let vehicleTypesData = [];
 
 // Helper function to check if a point is inside a polygon
 function isPointInPolygon(point, polygon) {
@@ -282,7 +283,44 @@ function createZoneInfo(feature) {
     return html;
 }
 
-// Create popup content for overlapping zones
+// Analyze vehicle type precedence across overlapping zones
+function analyzeVehicleTypePrecedence(features) {
+    const vehicleTypeRules = new Map();
+
+    // Collect all unique vehicle types and universal rules
+    features.forEach((feature, zoneIndex) => {
+        if (!feature.properties.rules) return;
+
+        feature.properties.rules.forEach((rule, ruleIndex) => {
+            const vehicleTypes = rule.vehicle_type_ids && rule.vehicle_type_ids.length > 0
+                ? rule.vehicle_type_ids
+                : ['*']; // '*' represents universal rules (no vehicle_type_ids specified)
+
+            vehicleTypes.forEach(vehicleType => {
+                if (!vehicleTypeRules.has(vehicleType)) {
+                    vehicleTypeRules.set(vehicleType, []);
+                }
+
+                vehicleTypeRules.get(vehicleType).push({
+                    zoneIndex,
+                    ruleIndex,
+                    zoneName: feature.properties.name?.[0]?.text || `Zone ${zoneIndex + 1}`,
+                    rule,
+                    precedenceScore: zoneIndex * 1000 + ruleIndex // Lower is higher precedence
+                });
+            });
+        });
+    });
+
+    // Sort rules by precedence for each vehicle type
+    vehicleTypeRules.forEach((rules, vehicleType) => {
+        rules.sort((a, b) => a.precedenceScore - b.precedenceScore);
+    });
+
+    return vehicleTypeRules;
+}
+
+// Create popup content for overlapping zones with vehicle type precedence
 function createZonePopupContent(features) {
     let html = `<div class="popup-content">`;
 
@@ -290,15 +328,79 @@ function createZonePopupContent(features) {
         html += createZoneInfo(features[0]);
     } else {
         html += `<h4 style="color: #ff6b6b;">⚠ ${features.length} Overlapping Zones</h4>`;
-        html += `<div style="max-height: 400px; overflow-y: auto;">`;
+
+        // Analyze vehicle type precedence
+        const vehicleTypePrecedence = analyzeVehicleTypePrecedence(features);
+        const hasVehicleSpecificRules = Array.from(vehicleTypePrecedence.keys()).some(key => key !== '*');
+
+        if (hasVehicleSpecificRules) {
+            // Show vehicle type specific precedence analysis
+            html += `<div style="background: #e3f2fd; border: 1px solid #2196f3; border-radius: 4px; padding: 8px; margin-bottom: 10px; font-size: 12px;">`;
+            html += `<strong>🚲 Vehicle Type Precedence Analysis:</strong><br>`;
+            html += `Different rules may apply to different vehicle types. The highest precedence rule for each type is shown below.`;
+            html += `</div>`;
+
+            // Create tabs or sections for each vehicle type
+            html += `<div style="margin-bottom: 15px;">`;
+            vehicleTypePrecedence.forEach((rules, vehicleType) => {
+                const highestPrecedenceRule = rules[0];
+                const vehicleTypeLabel = vehicleType === '*' ? 'All Vehicle Types' : `Vehicle Type: ${getVehicleTypeName(vehicleType)}`;
+
+                html += `<div style="background: #f8f9fa; border-left: 4px solid #007bff; padding: 8px; margin-bottom: 8px; border-radius: 0 4px 4px 0;">`;
+                html += `<div style="font-weight: bold; color: #007bff; font-size: 12px; margin-bottom: 4px;">${vehicleTypeLabel}</div>`;
+                html += `<div style="font-size: 11px; color: #666;">Highest precedence from: <strong>${highestPrecedenceRule.zoneName}</strong></div>`;
+
+                // Show the winning rule details
+                html += `<div style="margin-top: 6px; font-size: 11px;">`;
+                html += `<span style="color: ${highestPrecedenceRule.rule.ride_start_allowed ? '#28a745' : '#dc3545'};">Start: ${highestPrecedenceRule.rule.ride_start_allowed ? '✓' : '✗'}</span> | `;
+                html += `<span style="color: ${highestPrecedenceRule.rule.ride_end_allowed ? '#28a745' : '#dc3545'};">End: ${highestPrecedenceRule.rule.ride_end_allowed ? '✓' : '✗'}</span> | `;
+                html += `<span style="color: ${highestPrecedenceRule.rule.ride_through_allowed ? '#28a745' : '#dc3545'};">Through: ${highestPrecedenceRule.rule.ride_through_allowed ? '✓' : '✗'}</span>`;
+
+                if (highestPrecedenceRule.rule.maximum_speed_kph !== undefined) {
+                    html += ` | <span style="color: #ffc107;">Max Speed: ${highestPrecedenceRule.rule.maximum_speed_kph} km/h</span>`;
+                }
+                if (highestPrecedenceRule.rule.station_parking) {
+                    html += ` | <span style="color: #17a2b8;">Station Parking Required</span>`;
+                }
+                html += `</div>`;
+
+                // Show competing rules if any
+                if (rules.length > 1) {
+                    html += `<div style="font-size: 10px; color: #6c757d; margin-top: 4px;">`;
+                    html += `${rules.length - 1} lower precedence rule(s) also apply to this vehicle type.`;
+                    html += `</div>`;
+                }
+
+                html += `</div>`;
+            });
+            html += `</div>`;
+        } else {
+            // Original simple precedence explanation for universal rules only
+            html += `<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 8px; margin-bottom: 10px; font-size: 12px;">`;
+            html += `<strong>🔍 Rule Precedence:</strong><br>`;
+            html += `Rules from the <strong>first zone</strong> below take precedence in overlapping areas. `;
+            html += `Within each zone, earlier rules take precedence over later ones.`;
+            html += `</div>`;
+        }
+
+        // Show all zones for reference
+        html += `<div style="border-top: 1px solid #dee2e6; padding-top: 15px;">`;
+        html += `<h5 style="margin: 0 0 10px 0; color: #495057; font-size: 14px;">All Overlapping Zones:</h5>`;
+        html += `<div style="max-height: 300px; overflow-y: auto;">`;
+
         features.forEach((feature, index) => {
             if (index > 0) {
                 html += `<hr style="margin: 15px 0; border: none; border-top: 1px solid #eee;">`;
             }
+
             html += `<div style="padding: 5px 0;">`;
+            html += `<div style="font-size: 11px; color: #666; font-weight: bold; margin-bottom: 5px;">`;
+            html += `Zone #${index + 1} (${hasVehicleSpecificRules ? 'See analysis above for precedence' : index === 0 ? 'Highest Precedence' : 'Lower Precedence'})`;
+            html += `</div>`;
             html += createZoneInfo(feature);
             html += `</div>`;
         });
+        html += `</div>`;
         html += `</div>`;
     }
 
@@ -687,6 +789,134 @@ function loadVehicles(data) {
     }
 }
 
+// Load and store vehicle types data
+function loadVehicleTypes(data) {
+    vehicleTypesData = [];
+
+    try {
+        if (!data || !data.data || !data.data.vehicle_types) {
+            console.log('No vehicle types data found');
+            return;
+        }
+
+        vehicleTypesData = data.data.vehicle_types;
+        console.log(`Loaded ${vehicleTypesData.length} vehicle types`);
+
+    } catch (error) {
+        console.error('Error loading vehicle types:', error);
+        throw error;
+    }
+}
+
+// Get vehicle type name by ID with rich metadata
+function getVehicleTypeName(vehicleTypeId) {
+    if (!vehicleTypesData || vehicleTypesData.length === 0) {
+        return vehicleTypeId; // Return ID if no vehicle types data
+    }
+
+    const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicleTypeId);
+    if (!vehicleType) {
+        return vehicleTypeId; // Return ID if vehicle type not found
+    }
+
+    // Build a descriptive label
+    let label = '';
+
+    // Start with name if available
+    if (vehicleType.name && vehicleType.name.length > 0) {
+        label = vehicleType.name[0].text;
+    }
+
+    // Add form factor and propulsion type for clarity
+    const formFactorLabels = {
+        'bicycle': 'Bicycle',
+        'cargo_bicycle': 'Cargo Bicycle',
+        'car': 'Car',
+        'moped': 'Moped',
+        'scooter_standing': 'Standing Scooter',
+        'scooter_seated': 'Seated Scooter',
+        'scooter': 'Scooter',
+        'other': 'Other Vehicle'
+    };
+
+    const propulsionLabels = {
+        'human': 'Pedal',
+        'electric_assist': 'E-Assist',
+        'electric': 'Electric',
+        'combustion': 'Combustion',
+        'combustion_diesel': 'Diesel',
+        'hybrid': 'Hybrid',
+        'plug_in_hybrid': 'Plug-in Hybrid',
+        'hydrogen_fuel_cell': 'Hydrogen'
+    };
+
+    const formFactor = formFactorLabels[vehicleType.form_factor] || vehicleType.form_factor;
+    const propulsion = propulsionLabels[vehicleType.propulsion_type] || vehicleType.propulsion_type;
+
+    // Create descriptive parts
+    const parts = [];
+
+    if (propulsion !== 'Pedal') { // Don't add "Pedal" for human-powered bikes
+        parts.push(propulsion);
+    }
+
+    parts.push(formFactor);
+
+    // Add range if available and electric/hybrid
+    if (vehicleType.max_range_meters &&
+        ['electric', 'electric_assist', 'hybrid', 'plug_in_hybrid'].includes(vehicleType.propulsion_type)) {
+        const rangeKm = Math.round(vehicleType.max_range_meters / 1000);
+        parts.push(`${rangeKm}km range`);
+    }
+
+    const typeDescription = parts.join(' ');
+
+    // Check if we need to add ID for uniqueness
+    const duplicateNames = vehicleTypesData.filter(vt => {
+        if (!vt.name || vt.name.length === 0) return false;
+        const otherName = vt.name[0].text;
+        const otherFormFactor = formFactorLabels[vt.form_factor] || vt.form_factor;
+        const otherPropulsion = propulsionLabels[vt.propulsion_type] || vt.propulsion_type;
+
+        const otherParts = [];
+        if (otherPropulsion !== 'Pedal') {
+            otherParts.push(otherPropulsion);
+        }
+        otherParts.push(otherFormFactor);
+
+        if (vt.max_range_meters &&
+            ['electric', 'electric_assist', 'hybrid', 'plug_in_hybrid'].includes(vt.propulsion_type)) {
+            const otherRangeKm = Math.round(vt.max_range_meters / 1000);
+            otherParts.push(`${otherRangeKm}km range`);
+        }
+
+        return otherParts.join(' ') === typeDescription;
+    });
+
+    if (label && typeDescription !== label) {
+        // Show both name and type description if they're different
+        if (duplicateNames.length > 1) {
+            return `${label} (${typeDescription}) [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+        } else {
+            return `${label} (${typeDescription})`;
+        }
+    } else if (label) {
+        // Just the name, but add ID if there are duplicates with same name
+        if (duplicateNames.length > 1) {
+            return `${label} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+        } else {
+            return label;
+        }
+    } else {
+        // No name available, use type description
+        if (duplicateNames.length > 1) {
+            return `${typeDescription} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+        } else {
+            return typeDescription;
+        }
+    }
+}
+
 // Update system information display
 function updateSystemInfo(systemInfo) {
     const infoDiv = document.getElementById('systemInfo');
@@ -854,6 +1084,12 @@ async function loadGBFSSystem(data, sourcePath = '') {
             map.addLayer(layer); // Re-add all layers as visible
         });
 
+        // Clear all data arrays
+        allZones = [];
+        stationData = [];
+        vehicleData = [];
+        vehicleTypesData = [];
+
         // Hide all legend sections
         document.getElementById('zoneLegend').style.display = 'none';
         document.getElementById('stationLegend').style.display = 'none';
@@ -909,6 +1145,10 @@ async function loadGBFSSystem(data, sourcePath = '') {
 
         if (results.vehicle_status) {
             counts.vehicles = loadVehicles(results.vehicle_status);
+        }
+
+        if (results.vehicle_types) {
+            loadVehicleTypes(results.vehicle_types);
         }
 
         // Update UI
