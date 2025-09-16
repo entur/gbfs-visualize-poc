@@ -922,25 +922,45 @@ function loadVehicles(data) {
                 if (vehicle.vehicle_type_id) {
                     const vehicleTypeName = getVehicleTypeName(vehicle.vehicle_type_id);
                     popupContent += `<div><strong>Type:</strong> ${vehicleTypeName}</div>`;
+                }
 
-                    // Add pricing information for this vehicle type
+                // Add pricing information - check both vehicle-specific and vehicle type default pricing
+                let pricingPlanId = null;
+
+                // First check if vehicle has its own pricing_plan_id
+                if (vehicle.pricing_plan_id) {
+                    pricingPlanId = vehicle.pricing_plan_id;
+                }
+                // Otherwise use the vehicle type's default pricing plan
+                else if (vehicle.vehicle_type_id) {
                     const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicle.vehicle_type_id);
                     if (vehicleType && vehicleType.default_pricing_plan_id) {
-                        const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id).substring(3); // Remove " • " prefix
-                        if (pricingInfo) {
-                            popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
-                            popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Pricing</div>`;
-                            popupContent += `<div style="color: #388E3C; font-size: 11px;">${pricingInfo}</div>`;
+                        pricingPlanId = vehicleType.default_pricing_plan_id;
+                    }
+                }
 
-                            // Add explanation for unusual pricing structure
-                            if (pricingInfo.includes('⚠️')) {
-                                popupContent += `<div style="color: #ff8c00; font-size: 10px; font-style: italic; margin-top: 4px;">`;
-                                popupContent += `⚠️ Unusual pricing: registration fee + per-trip costs`;
-                                popupContent += `</div>`;
-                            }
+                if (pricingPlanId) {
+                    const pricingInfo = formatPricingInfo(pricingPlanId).substring(3); // Remove " • " prefix
+                    if (pricingInfo) {
+                        popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+                        popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Pricing</div>`;
+                        popupContent += `<div style="color: #388E3C; font-size: 11px;">${pricingInfo}</div>`;
 
+                        // Add explanation for unusual pricing structure
+                        if (pricingInfo.includes('⚠️')) {
+                            popupContent += `<div style="color: #ff8c00; font-size: 10px; font-style: italic; margin-top: 4px;">`;
+                            popupContent += `⚠️ Unusual pricing: registration fee + per-trip costs`;
                             popupContent += `</div>`;
                         }
+
+                        // Note if this is vehicle-specific pricing
+                        if (vehicle.pricing_plan_id) {
+                            popupContent += `<div style="color: #666; font-size: 9px; font-style: italic; margin-top: 4px;">`;
+                            popupContent += `Vehicle-specific pricing`;
+                            popupContent += `</div>`;
+                        }
+
+                        popupContent += `</div>`;
                     }
                 }
                 if (vehicle.is_reserved !== undefined) {
