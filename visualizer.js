@@ -36,7 +36,7 @@ const performanceSettings = {
     minZoomForAllMarkers: 10
 };
 
-// Zoom-based performance optimization
+// Zoom-based performance optimization and virtual station display switching
 map.on('zoomend', function() {
     const currentZoom = map.getZoom();
 
@@ -56,7 +56,93 @@ map.on('zoomend', function() {
             }
         }
     }
+
+    // Switch virtual station display between centroid and polygon based on zoom
+    refreshVirtualStationDisplay();
 });
+
+// Refresh virtual station display based on current zoom level
+function refreshVirtualStationDisplay() {
+    if (!stationData || stationData.length === 0) return;
+
+    const currentZoom = map.getZoom();
+
+    stationData.forEach(stationItem => {
+        const station = stationItem.station;
+        const status = stationItem.status;
+
+        if (station.is_virtual_station && station.station_area) {
+            // Remove current marker/polygon
+            layers.stations.removeLayer(stationItem.marker);
+
+            // Create popup content
+            let popupContent = `<div class="popup-content">`;
+            popupContent += `<h4>${station.name[0].text}</h4>`;
+            popupContent += `<div><strong>ID:</strong> ${station.station_id}</div>`;
+            popupContent += `<div><strong>Type:</strong> Virtual Station (Area)</div>`;
+
+            if (station.capacity !== undefined) {
+                popupContent += `<div><strong>Capacity:</strong> ${station.capacity}</div>`;
+            }
+
+            if (status) {
+                if (status.num_vehicles_available !== undefined) {
+                    popupContent += `<div><strong>Vehicles Available:</strong> ${status.num_vehicles_available}</div>`;
+                }
+                if (status.num_docks_available !== undefined) {
+                    popupContent += `<div><strong>Docks Available:</strong> ${status.num_docks_available}</div>`;
+                }
+                if (status.is_installed !== undefined) {
+                    popupContent += `<div><strong>Status:</strong> ${status.is_installed ? 'Installed' : 'Not Installed'}</div>`;
+                }
+            }
+
+            if (station.address) {
+                popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
+            }
+
+            popupContent += `</div>`;
+
+            let newMapElement;
+
+            // Switch between centroid and polygon based on zoom
+            if (currentZoom < 14) {
+                const centroid = calculatePolygonCentroid(station.station_area.coordinates);
+                newMapElement = L.marker(centroid, {
+                    icon: createStationIcon(status, true)
+                });
+            } else {
+                const latLngs = station.station_area.coordinates.map(polygon =>
+                    polygon.map(ring =>
+                        ring.map(coord => [coord[1], coord[0]])
+                    )
+                );
+                const style = getVirtualStationStyle(status, currentZoom);
+                newMapElement = L.polygon(latLngs, style);
+
+                // Add hover effects for refreshed polygons too
+                newMapElement.on('mouseover', function(e) {
+                    const layer = e.target;
+                    layer.setStyle({
+                        weight: style.weight + 2,
+                        fillOpacity: style.fillOpacity + 0.2
+                    });
+                });
+
+                newMapElement.on('mouseout', function(e) {
+                    const layer = e.target;
+                    layer.setStyle(style);
+                });
+            }
+
+            newMapElement.bindPopup(popupContent);
+            newMapElement.addTo(layers.stations);
+
+            // Update the stored reference
+            stationItem.marker = newMapElement;
+        }
+    });
+}
 
 // GBFS Loader instance
 const gbfsLoader = new GBFSLoader();
@@ -288,9 +374,20 @@ function loadGeofencingZones(data) {
 }
 
 // Create optimized station icon
-function createStationIcon(status) {
+function createStationIcon(status, isVirtualCentroid = false) {
     const available = status ? status.num_vehicles_available || 0 : 0;
     const color = available > 0 ? '#4CAF50' : '#FF9800';
+
+    if (isVirtualCentroid) {
+        // Special icon for virtual station centroids with vehicle count
+        const displayCount = available > 99 ? '99+' : available.toString();
+        return L.divIcon({
+            className: 'virtual-station-centroid',
+            html: `<div style="background: ${color}; border: 2px solid white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white; box-shadow: 0 0 6px rgba(0,0,0,0.4);">${available > 0 ? displayCount : '0'}</div>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+    }
 
     return L.divIcon({
         className: 'station-marker',
@@ -300,7 +397,43 @@ function createStationIcon(status) {
     });
 }
 
-// Load and display stations
+// Calculate centroid of a polygon
+function calculatePolygonCentroid(coordinates) {
+    // Use the first ring of the first polygon for centroid calculation
+    const ring = coordinates[0][0];
+    let x = 0, y = 0;
+
+    for (const coord of ring) {
+        x += coord[0]; // longitude
+        y += coord[1]; // latitude
+    }
+
+    return [y / ring.length, x / ring.length]; // Return as [lat, lng]
+}
+
+// Get virtual station styling based on availability and zoom level
+function getVirtualStationStyle(status, currentZoom = map.getZoom()) {
+    const available = status ? status.num_vehicles_available || 0 : 0;
+    const baseColor = available > 0 ? '#4CAF50' : '#FF9800';
+
+    // Make styling more prominent at lower zoom levels
+    const isLowZoom = currentZoom < 16;
+    const weight = isLowZoom ? 4 : 3;
+    const fillOpacity = isLowZoom ? 0.8 : 0.6;
+    const dashArray = isLowZoom ? '10, 6' : '8, 4';
+
+    return {
+        color: baseColor,
+        fillColor: available > 0 ? 'rgba(76, 175, 80, 0.4)' : 'rgba(255, 152, 0, 0.4)',
+        fillOpacity: fillOpacity,
+        weight: weight,
+        dashArray: dashArray,
+        // Add a subtle glow effect
+        className: 'virtual-station-area'
+    };
+}
+
+// Load and display stations (both physical and virtual)
 function loadStations(stationInfo, stationStatus) {
     layers.stations.clearLayers();
     stationData = [];
@@ -324,15 +457,11 @@ function loadStations(stationInfo, stationStatus) {
         stations.forEach(station => {
             const status = statusMap[station.station_id];
 
-            // Create optimized marker
-            const marker = L.marker([station.lat, station.lon], {
-                icon: createStationIcon(status)
-            });
-
-            // Create popup content
+            // Create popup content (shared between physical and virtual stations)
             let popupContent = `<div class="popup-content">`;
             popupContent += `<h4>${station.name[0].text}</h4>`;
             popupContent += `<div><strong>ID:</strong> ${station.station_id}</div>`;
+            popupContent += `<div><strong>Type:</strong> ${station.is_virtual_station ? 'Virtual Station (Area)' : 'Physical Station'}</div>`;
 
             if (station.capacity !== undefined) {
                 popupContent += `<div><strong>Capacity:</strong> ${station.capacity}</div>`;
@@ -350,15 +479,73 @@ function loadStations(stationInfo, stationStatus) {
                 }
             }
 
+            if (station.address) {
+                popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
+            }
+
             popupContent += `</div>`;
 
-            marker.bindPopup(popupContent);
-            marker.addTo(layers.stations);
+            let mapElement;
+            const currentZoom = map.getZoom();
+
+            // Handle virtual stations with areas
+            if (station.is_virtual_station && station.station_area) {
+                // Convert MultiPolygon coordinates to Leaflet format
+                const latLngs = station.station_area.coordinates.map(polygon =>
+                    polygon.map(ring =>
+                        ring.map(coord => [coord[1], coord[0]]) // Swap lng/lat to lat/lng
+                    )
+                );
+
+                // Get styling based on vehicle availability
+                const style = getVirtualStationStyle(status);
+
+                // At low zoom levels, show centroid with vehicle count
+                if (currentZoom < 14) {
+                    const centroid = calculatePolygonCentroid(station.station_area.coordinates);
+                    mapElement = L.marker(centroid, {
+                        icon: createStationIcon(status, true)
+                    });
+                } else {
+                    // At high zoom levels, show full polygon area
+                    mapElement = L.polygon(latLngs, style);
+
+                    // Add a subtle animation on hover
+                    mapElement.on('mouseover', function(e) {
+                        const layer = e.target;
+                        layer.setStyle({
+                            weight: style.weight + 2,
+                            fillOpacity: style.fillOpacity + 0.2
+                        });
+                    });
+
+                    mapElement.on('mouseout', function(e) {
+                        const layer = e.target;
+                        layer.setStyle(style);
+                    });
+                }
+
+                mapElement.bindPopup(popupContent);
+                mapElement.addTo(layers.stations);
+
+            } else if (station.lat !== undefined && station.lon !== undefined) {
+                // Handle physical stations with point locations
+                mapElement = L.marker([station.lat, station.lon], {
+                    icon: createStationIcon(status)
+                });
+
+                mapElement.bindPopup(popupContent);
+                mapElement.addTo(layers.stations);
+
+            } else {
+                console.warn(`Station ${station.station_id} has no location data (neither lat/lon nor station_area)`);
+                return; // Skip this station
+            }
 
             stationData.push({
                 station: station,
                 status: status,
-                marker: marker
+                marker: mapElement
             });
         });
 
@@ -653,6 +840,10 @@ async function loadGBFSSystem(data, sourcePath = '') {
             'vehicle_status',
             'vehicle_types'
         ].filter(feed => availableFeeds.includes(feed));
+
+        // Update loading indicator with feed count
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        loadingIndicator.innerHTML = `Loading GBFS data... (${feedsToLoad.length} feeds, rate-limited to 2/sec)`;
 
         const { results, errors } = await gbfsLoader.loadFeeds(feedsToLoad);
 

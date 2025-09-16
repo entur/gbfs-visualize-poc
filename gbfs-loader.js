@@ -8,6 +8,55 @@ class GBFSLoader {
         this.loadedFeeds = {};
         this.systemInfo = null;
         this.localFiles = {}; // Store local files by name
+        this.requestQueue = [];
+        this.isProcessingQueue = false;
+        this.lastRequestTime = 0;
+        this.minRequestInterval = 500; // 500ms = 2 requests per second
+    }
+
+    // Rate-limited fetch function
+    async rateLimitedFetch(url) {
+        return new Promise((resolve, reject) => {
+            this.requestQueue.push({ url, resolve, reject });
+            this.processQueue();
+        });
+    }
+
+    // Process the request queue with rate limiting
+    async processQueue() {
+        if (this.isProcessingQueue || this.requestQueue.length === 0) {
+            return;
+        }
+
+        this.isProcessingQueue = true;
+
+        while (this.requestQueue.length > 0) {
+            const { url, resolve, reject } = this.requestQueue.shift();
+
+            // Calculate time to wait based on last request
+            const now = Date.now();
+            const timeSinceLastRequest = now - this.lastRequestTime;
+            const waitTime = Math.max(0, this.minRequestInterval - timeSinceLastRequest);
+
+            if (waitTime > 0) {
+                console.log(`Rate limiting: waiting ${waitTime}ms before next request`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+
+            try {
+                this.lastRequestTime = Date.now();
+                const response = await fetch(url, {
+                    headers: {
+                        'Et-Client-Name': 'entur-gbfs-visualizer'
+                    }
+                });
+                resolve(response);
+            } catch (error) {
+                reject(error);
+            }
+        }
+
+        this.isProcessingQueue = false;
     }
 
     // Parse base URL from file path or URL
@@ -86,14 +135,14 @@ class GBFSLoader {
                     }
                 }
             } else {
-                // Remote URL loading
+                // Remote URL loading with rate limiting
                 let feedUrl = feed.url;
                 if (!feedUrl.startsWith('http://') && !feedUrl.startsWith('https://')) {
                     feedUrl = this.baseUrl + feed.url;
                 }
 
-                // Fetch the feed data
-                const response = await fetch(feedUrl);
+                // Use rate-limited fetch
+                const response = await this.rateLimitedFetch(feedUrl);
                 if (!response.ok) {
                     throw new Error(`Failed to fetch ${feedName}: ${response.statusText}`);
                 }
@@ -157,7 +206,19 @@ class GBFSLoader {
     // Load from local file path (for default data)
     async loadFromPath(path) {
         try {
-            const response = await fetch(path);
+            let response;
+            if (path.startsWith('http://') || path.startsWith('https://')) {
+                // Use rate-limited fetch for remote URLs
+                response = await this.rateLimitedFetch(path);
+            } else {
+                // Direct fetch for local files
+                response = await fetch(path, {
+                    headers: {
+                        'Et-Client-Name': 'entur-gbfs-visualizer'
+                    }
+                });
+            }
+
             if (!response.ok) {
                 throw new Error(`Failed to fetch ${path}: ${response.statusText}`);
             }

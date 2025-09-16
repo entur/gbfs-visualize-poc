@@ -315,6 +315,16 @@
         .tab-content.active {
             display: block;
         }
+
+        /* Virtual station area styling for better visibility */
+        .virtual-station-area {
+            filter: drop-shadow(0 0 3px rgba(0,0,0,0.4));
+        }
+
+        .virtual-station-area:hover {
+            filter: drop-shadow(0 0 6px rgba(0,0,0,0.6));
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -382,13 +392,31 @@
 
         <div class="legend-section" id="stationLegend" style="display: none;">
             <h4>Stations</h4>
+            <div style="margin-bottom: 8px; font-weight: 600; color: #555; font-size: 13px;">Physical Stations:</div>
             <div class="legend-item">
-                <div class="legend-color" style="background: #4CAF50; border-color: #4CAF50;"></div>
+                <div class="legend-color" style="background: #4CAF50; border-color: #4CAF50; border-radius: 50%; width: 12px; height: 12px;"></div>
                 <span>Available</span>
             </div>
             <div class="legend-item">
-                <div class="legend-color" style="background: #FF9800; border-color: #FF9800;"></div>
+                <div class="legend-color" style="background: #FF9800; border-color: #FF9800; border-radius: 50%; width: 12px; height: 12px;"></div>
                 <span>No Vehicles</span>
+            </div>
+
+            <div style="margin: 12px 0 8px 0; font-weight: 600; color: #555; font-size: 13px;">Virtual Stations:</div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4CAF50; border: 2px solid white; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; color: white; box-shadow: 0 0 3px rgba(0,0,0,0.3);">5</div>
+                <span>Centroid (with count)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(76, 175, 80, 0.3); border: 3px dashed #4CAF50; width: 18px; height: 12px;"></div>
+                <span>Area (vehicles available)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(255, 152, 0, 0.3); border: 3px dashed #FF9800; width: 18px; height: 12px;"></div>
+                <span>Area (no vehicles)</span>
+            </div>
+            <div style="font-size: 11px; color: #666; margin-top: 8px; font-style: italic;">
+                *Virtual stations show centroids when zoomed out, areas when zoomed in
             </div>
         </div>
 
