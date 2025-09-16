@@ -43,12 +43,18 @@ We're learning as we go, so expect rough edges, creative solutions, and room for
 
 ### Loading Data
 
-**Option 1: From URL (Recommended)**
+**Option 1: Search Public Systems**
+1. Click "Load Systems Catalog" to fetch the MobilityData registry
+2. Search by name, location, or country code
+3. Click on any system to load it automatically
+4. Systems with v3.0 support are highlighted
+
+**Option 2: From URL (Direct Link)**
 1. Enter a GBFS discovery URL (e.g., `https://example.com/gbfs.json`)
 2. Click "Load from URL"
 3. Use the copy button (📋) to share the visualization
 
-**Option 2: From Local Files**
+**Option 3: From Local Files**
 1. Select multiple JSON files including:
    - `gbfs.json` (discovery file)
    - Feed files like `station_information.json`, `vehicle_status.json`, etc.

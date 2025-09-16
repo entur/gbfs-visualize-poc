@@ -1631,5 +1631,223 @@ document.addEventListener('DOMContentLoaded', function() {
     checkForDeepLink();
 });
 
+// Global variable to store systems catalog
+let systemsCatalog = [];
+
+// Parse CSV text into array of objects
+function parseCSV(csvText) {
+    const lines = csvText.split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    const results = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim() === '') continue;
+
+        // Handle CSV with potential commas in values (quoted fields)
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let char of lines[i]) {
+            if (char === '"') {
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                values.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        values.push(current.trim());
+
+        const row = {};
+        headers.forEach((header, index) => {
+            row[header] = values[index] || '';
+        });
+        results.push(row);
+    }
+
+    return results;
+}
+
+// Load systems catalog from MobilityData
+async function loadSystemsCatalog() {
+    const button = document.getElementById('loadCatalogButton');
+    const searchInput = document.getElementById('systemSearchInput');
+    const searchResults = document.getElementById('searchResults');
+
+    button.textContent = 'Loading catalog...';
+    button.disabled = true;
+
+    try {
+        const response = await fetch('https://raw.githubusercontent.com/MobilityData/gbfs/refs/heads/master/systems.csv');
+        if (!response.ok) throw new Error('Failed to load systems catalog');
+
+        const csvText = await response.text();
+        systemsCatalog = parseCSV(csvText);
+
+        // Filter to only include systems with auto-discovery URL and no auth required
+        systemsCatalog = systemsCatalog.filter(system =>
+            system['Auto-Discovery URL'] &&
+            (!system['Authentication Type'] || system['Authentication Type'].toLowerCase() === 'none')
+        );
+
+        console.log(`Loaded ${systemsCatalog.length} GBFS systems from catalog`);
+
+        // Count v3 systems
+        const v3Systems = systemsCatalog.filter(system => {
+            const versions = system['Supported Versions'] || '';
+            return versions.includes('3.0');
+        });
+
+        button.textContent = `✓ ${systemsCatalog.length} systems (${v3Systems.length} with v3.0)`;
+        button.style.background = '#4CAF50';
+
+        // Enable search input if it was disabled
+        if (searchInput) {
+            searchInput.disabled = false;
+            searchInput.placeholder = 'Search by name, location, or country...';
+            searchInput.focus();
+        }
+
+        // Show all systems initially
+        filterSystems('');
+
+    } catch (error) {
+        console.error('Error loading systems catalog:', error);
+        button.textContent = '❌ Failed to load catalog';
+        button.style.background = '#f44336';
+        setTimeout(() => {
+            button.textContent = '🔍 Load Systems Catalog';
+            button.style.background = '#2196F3';
+            button.disabled = false;
+        }, 3000);
+    }
+}
+
+// Filter and display systems based on search query
+function filterSystems(query) {
+    const searchResults = document.getElementById('searchResults');
+    const v3OnlyCheckbox = document.getElementById('v3OnlyCheckbox');
+
+    if (systemsCatalog.length === 0) {
+        searchResults.style.display = 'none';
+        return;
+    }
+
+    let filtered = query.trim() === '' ? systemsCatalog : systemsCatalog.filter(system => {
+        const searchText = query.toLowerCase();
+        return (
+            system.Name.toLowerCase().includes(searchText) ||
+            system.Location.toLowerCase().includes(searchText) ||
+            system['Country Code'].toLowerCase().includes(searchText)
+        );
+    });
+
+    // Apply v3-only filter if checkbox is checked
+    if (v3OnlyCheckbox && v3OnlyCheckbox.checked) {
+        filtered = filtered.filter(system => {
+            const versions = system['Supported Versions'] || '';
+            return versions.includes('3.0');
+        });
+    }
+
+    searchResults.innerHTML = '';
+
+    if (filtered.length === 0) {
+        const message = v3OnlyCheckbox && v3OnlyCheckbox.checked ?
+            'No v3.0 compatible systems found' :
+            'No systems found';
+        searchResults.innerHTML = `<div style="padding: 10px; color: #999; text-align: center;">${message}</div>`;
+    } else {
+        // Show max 50 results
+        filtered.slice(0, 50).forEach(system => {
+            const resultItem = document.createElement('div');
+            resultItem.className = 'search-result-item';
+
+            const versions = system['Supported Versions'] || '';
+            const hasV3 = versions.includes('3.0');
+            const versionBadge = hasV3 ?
+                '<span class="search-result-version">v3.0</span>' :
+                '<span class="search-result-version search-result-unsupported">No v3</span>';
+
+            resultItem.innerHTML = `
+                <div class="search-result-name">${system.Name}${versionBadge}</div>
+                <div class="search-result-location">${system.Location}, ${system['Country Code']}</div>
+            `;
+
+            // Store system data in the element for retrieval on click
+            resultItem.dataset.systemUrl = system['Auto-Discovery URL'];
+            resultItem.dataset.systemName = system.Name;
+
+            searchResults.appendChild(resultItem);
+        });
+
+        if (filtered.length > 50) {
+            searchResults.innerHTML += '<div style="padding: 10px; color: #999; text-align: center; font-size: 12px;">Showing first 50 results</div>';
+        }
+
+        // Add a close hint at the bottom
+        searchResults.innerHTML += '<div style="padding: 8px; background: #f5f5f5; text-align: center; font-size: 11px; color: #666; border-top: 1px solid #ddd;">Press ESC to hide results</div>';
+    }
+
+    searchResults.style.display = 'block';
+}
+
+// Handle catalog button click
+document.getElementById('loadCatalogButton').addEventListener('click', loadSystemsCatalog);
+
+// Handle search input
+document.getElementById('systemSearchInput').addEventListener('input', function(e) {
+    if (systemsCatalog.length > 0) {
+        filterSystems(e.target.value);
+    }
+});
+
+// Handle search input focus - show results if catalog is loaded
+document.getElementById('systemSearchInput').addEventListener('focus', function(e) {
+    if (systemsCatalog.length > 0) {
+        filterSystems(e.target.value);
+    }
+});
+
+// Handle v3-only checkbox
+document.getElementById('v3OnlyCheckbox').addEventListener('change', function() {
+    const searchInput = document.getElementById('systemSearchInput');
+    if (systemsCatalog.length > 0) {
+        filterSystems(searchInput.value);
+    }
+});
+
+// Handle clicks on search results using event delegation
+document.getElementById('searchResults').addEventListener('click', function(e) {
+    const resultItem = e.target.closest('.search-result-item');
+    if (resultItem) {
+        e.stopPropagation();
+        const url = resultItem.dataset.systemUrl;
+        const name = resultItem.dataset.systemName;
+
+        if (url) {
+            document.getElementById('gbfsUrlInput').value = url;
+            document.getElementById('gbfsUrlInput').dispatchEvent(new Event('input'));
+            // Don't hide the results - let user browse multiple systems
+            document.getElementById('systemSearchInput').value = name;
+
+            // Auto-load the system
+            loadGBFSFromUrl();
+        }
+    }
+});
+
+// Hide search results when pressing Escape or clicking the Load button from another tab
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const searchResults = document.getElementById('searchResults');
+        if (searchResults) {
+            searchResults.style.display = 'none';
+        }
+    }
+});
+
 // Page is ready for user to load GBFS data
 console.log('GBFS Visualizer ready - load from URL or select multiple local files');

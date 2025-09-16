@@ -279,6 +279,58 @@
             display: block;
         }
 
+        .search-result-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.2s;
+        }
+
+        .search-result-item:hover {
+            background: #f5f5f5;
+        }
+
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+
+        .search-result-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 3px;
+        }
+
+        .search-result-location {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .search-result-version {
+            display: inline-block;
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-left: 5px;
+        }
+
+        .search-result-unsupported {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        #searchResults {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+
+        #searchResults:empty {
+            border: none;
+        }
+
         .tabs {
             display: flex;
             gap: 5px;
@@ -345,7 +397,20 @@
 
             <div style="margin-bottom: 20px;">
                 <label>
-                    <strong>Option 1:</strong> Load from URL (recommended for live systems):
+                    <strong>Option 1:</strong> Search public GBFS systems:
+                    <input type="text" id="systemSearchInput" placeholder="Load catalog first, then search..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-top: 5px; box-sizing: border-box;" disabled>
+                </label>
+                <button id="loadCatalogButton" style="width: 100%; margin-top: 8px; background: #2196F3;">🔍 Load Systems Catalog</button>
+                <label style="display: flex; align-items: center; margin-top: 8px; font-size: 13px; color: #555;">
+                    <input type="checkbox" id="v3OnlyCheckbox" style="margin-right: 6px;">
+                    Show only v3.0 compatible systems
+                </label>
+                <div id="searchResults" style="max-height: 250px; overflow-y: auto; margin-top: 10px; display: none;"></div>
+            </div>
+
+            <div style="border-top: 1px solid #eee; padding-top: 20px; margin-bottom: 20px;">
+                <label>
+                    <strong>Option 2:</strong> Load from URL (direct link):
                     <input type="url" id="gbfsUrlInput" placeholder="https://example.com/gbfs.json" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-top: 5px; box-sizing: border-box;">
                 </label>
                 <div style="display: flex; gap: 10px; margin-top: 10px;">
@@ -356,7 +421,7 @@
 
             <div style="border-top: 1px solid #eee; padding-top: 20px;">
                 <label>
-                    <strong>Option 2:</strong> Load local files (select multiple files):
+                    <strong>Option 3:</strong> Load local files (select multiple files):
                     <input type="file" id="gbfsFileInput" accept=".json" multiple style="margin-top: 5px;">
                 </label>
                 <div style="font-size: 12px; color: #666; margin-top: 5px;">
