@@ -383,16 +383,35 @@
         <div class="legend-section" id="stationLegend" style="display: none;">
             <h4>Stations</h4>
             <div class="legend-item">
-                <div class="legend-icon">📍</div>
-                <span>Bike Station</span>
+                <div class="legend-color" style="background: #4CAF50; border-color: #4CAF50;"></div>
+                <span>Available</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #FF9800; border-color: #FF9800;"></div>
+                <span>No Vehicles</span>
             </div>
         </div>
 
         <div class="legend-section" id="vehicleLegend" style="display: none;">
             <h4>Vehicles</h4>
             <div class="legend-item">
-                <div class="legend-icon">🛴</div>
-                <span>Available Vehicle</span>
+                <div class="legend-color" style="background: #4CAF50; border-color: #4CAF50;"></div>
+                <span>Available</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #FF9800; border-color: #FF9800;"></div>
+                <span>Reserved</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #F44336; border-color: #F44336;"></div>
+                <span>Low Battery</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #757575; border-color: #757575;"></div>
+                <span>Disabled</span>
+            </div>
+            <div style="font-size: 11px; color: #666; margin-top: 8px; font-style: italic;">
+                *Vehicles hidden when zoomed out for performance
             </div>
         </div>
 
@@ -422,6 +441,9 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
     <script src="gbfs-loader.js"></script>
     <script src="visualizer.js"></script>
 </body>

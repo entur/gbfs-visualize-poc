@@ -9,13 +9,54 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // Layer groups for different data types
 const layers = {
     zones: L.layerGroup(),
-    stations: L.layerGroup(),
-    vehicles: L.layerGroup(),
+    stations: L.markerClusterGroup({
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true
+    }),
+    vehicles: L.markerClusterGroup({
+        maxClusterRadius: 30,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        disableClusteringAtZoom: 16
+    }),
     regions: L.layerGroup()
 };
 
 // Add all layers to map (will be toggled via controls)
 Object.values(layers).forEach(layer => layer.addTo(map));
+
+// Performance settings
+const performanceSettings = {
+    maxVehiclesWithoutClustering: 100,
+    maxStationsWithoutClustering: 50,
+    minZoomForVehicles: 12,
+    minZoomForAllMarkers: 10
+};
+
+// Zoom-based performance optimization
+map.on('zoomend', function() {
+    const currentZoom = map.getZoom();
+
+    // Show/hide vehicles based on zoom level
+    if (vehicleData.length > performanceSettings.maxVehiclesWithoutClustering) {
+        if (currentZoom < performanceSettings.minZoomForVehicles) {
+            if (map.hasLayer(layers.vehicles)) {
+                map.removeLayer(layers.vehicles);
+            }
+        } else {
+            if (!map.hasLayer(layers.vehicles)) {
+                // Check if vehicles layer should be visible based on checkbox
+                const vehiclesToggle = document.getElementById('vehiclesToggle');
+                if (vehiclesToggle && vehiclesToggle.checked) {
+                    map.addLayer(layers.vehicles);
+                }
+            }
+        }
+    }
+});
 
 // GBFS Loader instance
 const gbfsLoader = new GBFSLoader();
@@ -246,6 +287,19 @@ function loadGeofencingZones(data) {
     }
 }
 
+// Create optimized station icon
+function createStationIcon(status) {
+    const available = status ? status.num_vehicles_available || 0 : 0;
+    const color = available > 0 ? '#4CAF50' : '#FF9800';
+
+    return L.divIcon({
+        className: 'station-marker',
+        html: `<div style="width: 12px; height: 12px; background: ${color}; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>`,
+        iconSize: [12, 12],
+        iconAnchor: [6, 6]
+    });
+}
+
 // Load and display stations
 function loadStations(stationInfo, stationStatus) {
     layers.stations.clearLayers();
@@ -270,14 +324,9 @@ function loadStations(stationInfo, stationStatus) {
         stations.forEach(station => {
             const status = statusMap[station.station_id];
 
-            // Create marker
+            // Create optimized marker
             const marker = L.marker([station.lat, station.lon], {
-                icon: L.divIcon({
-                    className: 'custom-div-icon',
-                    html: `<div style="background: white; border: 2px solid #4CAF50; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold;">📍</div>`,
-                    iconSize: [30, 30],
-                    iconAnchor: [15, 15]
-                })
+                icon: createStationIcon(status)
             });
 
             // Create popup content
@@ -324,7 +373,26 @@ function loadStations(stationInfo, stationStatus) {
     }
 }
 
-// Load and display vehicles
+// Create optimized vehicle icon
+function createVehicleIcon(vehicle) {
+    const battery = vehicle.current_fuel_percent ? Math.round(vehicle.current_fuel_percent * 100) : 100;
+    const isDisabled = vehicle.is_disabled;
+    const isReserved = vehicle.is_reserved;
+
+    let color = '#4CAF50'; // Available
+    if (isDisabled) color = '#757575'; // Disabled
+    else if (isReserved) color = '#FF9800'; // Reserved
+    else if (battery < 20) color = '#F44336'; // Low battery
+
+    return L.divIcon({
+        className: 'vehicle-marker',
+        html: `<div style="width: 8px; height: 8px; background: ${color}; border: 1px solid white; border-radius: 50%; box-shadow: 0 0 3px rgba(0,0,0,0.4);"></div>`,
+        iconSize: [8, 8],
+        iconAnchor: [4, 4]
+    });
+}
+
+// Load and display vehicles with performance optimizations
 function loadVehicles(data) {
     layers.vehicles.clearLayers();
     vehicleData = [];
@@ -337,16 +405,21 @@ function loadVehicles(data) {
 
         const vehicles = data.data.vehicles;
 
+        // Performance optimization: limit vehicles shown at low zoom levels
+        const currentZoom = map.getZoom();
+        const shouldShowVehicles = currentZoom >= performanceSettings.minZoomForVehicles ||
+                                 vehicles.length <= performanceSettings.maxVehiclesWithoutClustering;
+
+        if (!shouldShowVehicles) {
+            console.log(`Skipping ${vehicles.length} vehicles at zoom level ${currentZoom}. Zoom in to see vehicles.`);
+            return vehicles.length;
+        }
+
         vehicles.forEach(vehicle => {
             if (vehicle.lat && vehicle.lon) {
-                // Create marker
+                // Create optimized marker
                 const marker = L.marker([vehicle.lat, vehicle.lon], {
-                    icon: L.divIcon({
-                        className: 'custom-div-icon',
-                        html: `<div style="background: white; border: 2px solid #FF9800; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">🛴</div>`,
-                        iconSize: [24, 24],
-                        iconAnchor: [12, 12]
-                    })
+                    icon: createVehicleIcon(vehicle)
                 });
 
                 // Create popup content
