@@ -135,4 +135,4 @@ The visualizer aims to support the full GBFS specification, but we're open to cr
 
 ## License
 
-[Add your license here]
+This project is licensed under the European Union Public Licence (EUPL) v1.2. See the [LICENSE](LICENSE) file for details.
