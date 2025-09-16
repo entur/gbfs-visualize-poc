@@ -11,7 +11,7 @@ class GBFSLoader {
         this.requestQueue = [];
         this.isProcessingQueue = false;
         this.lastRequestTime = 0;
-        this.minRequestInterval = 500; // 500ms = 2 requests per second
+        this.minRequestInterval = 100;
     }
 
     // Rate-limited fetch function
@@ -212,11 +212,7 @@ class GBFSLoader {
                 response = await this.rateLimitedFetch(path);
             } else {
                 // Direct fetch for local files
-                response = await fetch(path, {
-                    headers: {
-                        'Et-Client-Name': 'entur-gbfs-visualizer'
-                    }
-                });
+                response = await fetch(path);
             }
 
             if (!response.ok) {

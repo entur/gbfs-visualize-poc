@@ -1,5 +1,5 @@
-// Initialize the map
-const map = L.map('map').setView([59.9139, 10.7522], 12); // Oslo coordinates
+// Initialize the map with world view
+const map = L.map('map').setView([20, 0], 3); // World view centered on equator, no repetition
 
 // Add OpenStreetMap tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -33,94 +33,98 @@ const performanceSettings = {
     maxVehiclesWithoutClustering: 100,
     maxStationsWithoutClustering: 50,
     minZoomForVehicles: 12,
-    minZoomForAllMarkers: 10
+    minZoomForAllMarkers: 10,
+    virtualStationZoomThreshold: 14
 };
 
-// Zoom-based performance optimization and virtual station display switching
-map.on('zoomend', function() {
-    const currentZoom = map.getZoom();
+// Virtual station display state
+let currentVirtualDisplayMode = null; // 'centroid' or 'polygon'
+let zoomDebounceTimeout = null;
 
-    // Show/hide vehicles based on zoom level
-    if (vehicleData.length > performanceSettings.maxVehiclesWithoutClustering) {
-        if (currentZoom < performanceSettings.minZoomForVehicles) {
-            if (map.hasLayer(layers.vehicles)) {
-                map.removeLayer(layers.vehicles);
-            }
-        } else {
-            if (!map.hasLayer(layers.vehicles)) {
-                // Check if vehicles layer should be visible based on checkbox
-                const vehiclesToggle = document.getElementById('vehiclesToggle');
-                if (vehiclesToggle && vehiclesToggle.checked) {
-                    map.addLayer(layers.vehicles);
+// Optimized zoom event handler with debouncing and threshold detection
+map.on('zoomend', function() {
+    // Clear any pending debounced refresh
+    if (zoomDebounceTimeout) {
+        clearTimeout(zoomDebounceTimeout);
+    }
+
+    // Debounce the refresh to avoid multiple rapid calls
+    zoomDebounceTimeout = setTimeout(() => {
+        const currentZoom = map.getZoom();
+
+        // Show/hide vehicles based on zoom level
+        if (vehicleData.length > performanceSettings.maxVehiclesWithoutClustering) {
+            if (currentZoom < performanceSettings.minZoomForVehicles) {
+                if (map.hasLayer(layers.vehicles)) {
+                    map.removeLayer(layers.vehicles);
+                }
+            } else {
+                if (!map.hasLayer(layers.vehicles)) {
+                    // Check if vehicles layer should be visible based on checkbox
+                    const vehiclesToggle = document.getElementById('vehiclesToggle');
+                    if (vehiclesToggle && vehiclesToggle.checked) {
+                        map.addLayer(layers.vehicles);
+                    }
                 }
             }
         }
-    }
 
-    // Switch virtual station display between centroid and polygon based on zoom
-    refreshVirtualStationDisplay();
+        // Only refresh virtual stations if we cross the threshold
+        const newDisplayMode = currentZoom < performanceSettings.virtualStationZoomThreshold ? 'centroid' : 'polygon';
+        if (currentVirtualDisplayMode !== newDisplayMode) {
+            currentVirtualDisplayMode = newDisplayMode;
+            refreshVirtualStationDisplay();
+        }
+    }, 150); // 150ms debounce
 });
 
-// Refresh virtual station display based on current zoom level
+// Optimized virtual station display refresh - only processes virtual stations
 function refreshVirtualStationDisplay() {
     if (!stationData || stationData.length === 0) return;
 
     const currentZoom = map.getZoom();
+    const virtualStationsToProcess = stationData.filter(item =>
+        item.station.is_virtual_station && item.station.station_area
+    );
 
-    stationData.forEach(stationItem => {
-        const station = stationItem.station;
-        const status = stationItem.status;
+    if (virtualStationsToProcess.length === 0) return;
 
-        if (station.is_virtual_station && station.station_area) {
+    console.log(`Refreshing ${virtualStationsToProcess.length} virtual stations for zoom ${currentZoom}`);
+
+    // Use requestAnimationFrame to batch DOM updates
+    requestAnimationFrame(() => {
+        virtualStationsToProcess.forEach(stationItem => {
+            const station = stationItem.station;
+            const status = stationItem.status;
+
             // Remove current marker/polygon
             layers.stations.removeLayer(stationItem.marker);
 
-            // Create popup content
-            let popupContent = `<div class="popup-content">`;
-            popupContent += `<h4>${station.name[0].text}</h4>`;
-            popupContent += `<div><strong>ID:</strong> ${station.station_id}</div>`;
-            popupContent += `<div><strong>Type:</strong> Virtual Station (Area)</div>`;
-
-            if (station.capacity !== undefined) {
-                popupContent += `<div><strong>Capacity:</strong> ${station.capacity}</div>`;
+            // Pre-calculate values once
+            if (!stationItem._cachedData) {
+                stationItem._cachedData = {
+                    popupContent: createVirtualStationPopup(station, status),
+                    centroid: calculatePolygonCentroid(station.station_area.coordinates),
+                    latLngs: station.station_area.coordinates.map(polygon =>
+                        polygon.map(ring =>
+                            ring.map(coord => [coord[1], coord[0]])
+                        )
+                    )
+                };
             }
-
-            if (status) {
-                if (status.num_vehicles_available !== undefined) {
-                    popupContent += `<div><strong>Vehicles Available:</strong> ${status.num_vehicles_available}</div>`;
-                }
-                if (status.num_docks_available !== undefined) {
-                    popupContent += `<div><strong>Docks Available:</strong> ${status.num_docks_available}</div>`;
-                }
-                if (status.is_installed !== undefined) {
-                    popupContent += `<div><strong>Status:</strong> ${status.is_installed ? 'Installed' : 'Not Installed'}</div>`;
-                }
-            }
-
-            if (station.address) {
-                popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
-            }
-
-            popupContent += `</div>`;
 
             let newMapElement;
 
             // Switch between centroid and polygon based on zoom
-            if (currentZoom < 14) {
-                const centroid = calculatePolygonCentroid(station.station_area.coordinates);
-                newMapElement = L.marker(centroid, {
+            if (currentZoom < performanceSettings.virtualStationZoomThreshold) {
+                newMapElement = L.marker(stationItem._cachedData.centroid, {
                     icon: createStationIcon(status, true)
                 });
             } else {
-                const latLngs = station.station_area.coordinates.map(polygon =>
-                    polygon.map(ring =>
-                        ring.map(coord => [coord[1], coord[0]])
-                    )
-                );
                 const style = getVirtualStationStyle(status, currentZoom);
-                newMapElement = L.polygon(latLngs, style);
+                newMapElement = L.polygon(stationItem._cachedData.latLngs, style);
 
-                // Add hover effects for refreshed polygons too
+                // Add hover effects
                 newMapElement.on('mouseover', function(e) {
                     const layer = e.target;
                     layer.setStyle({
@@ -135,13 +139,44 @@ function refreshVirtualStationDisplay() {
                 });
             }
 
-            newMapElement.bindPopup(popupContent);
+            newMapElement.bindPopup(stationItem._cachedData.popupContent);
             newMapElement.addTo(layers.stations);
 
             // Update the stored reference
             stationItem.marker = newMapElement;
-        }
+        });
     });
+}
+
+// Create cached popup content for virtual stations
+function createVirtualStationPopup(station, status) {
+    let popupContent = `<div class="popup-content">`;
+    popupContent += `<h4>${station.name[0].text}</h4>`;
+    popupContent += `<div><strong>ID:</strong> ${station.station_id}</div>`;
+    popupContent += `<div><strong>Type:</strong> Virtual Station (Area)</div>`;
+
+    if (station.capacity !== undefined) {
+        popupContent += `<div><strong>Capacity:</strong> ${station.capacity}</div>`;
+    }
+
+    if (status) {
+        if (status.num_vehicles_available !== undefined) {
+            popupContent += `<div><strong>Vehicles Available:</strong> ${status.num_vehicles_available}</div>`;
+        }
+        if (status.num_docks_available !== undefined) {
+            popupContent += `<div><strong>Docks Available:</strong> ${status.num_docks_available}</div>`;
+        }
+        if (status.is_installed !== undefined) {
+            popupContent += `<div><strong>Status:</strong> ${status.is_installed ? 'Installed' : 'Not Installed'}</div>`;
+        }
+    }
+
+    if (station.address) {
+        popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
+    }
+
+    popupContent += `</div>`;
+    return popupContent;
 }
 
 // GBFS Loader instance
@@ -843,7 +878,7 @@ async function loadGBFSSystem(data, sourcePath = '') {
 
         // Update loading indicator with feed count
         const loadingIndicator = document.getElementById('loadingIndicator');
-        loadingIndicator.innerHTML = `Loading GBFS data... (${feedsToLoad.length} feeds, rate-limited to 2/sec)`;
+        loadingIndicator.innerHTML = `Loading GBFS data... (${feedsToLoad.length} feeds)`;
 
         const { results, errors } = await gbfsLoader.loadFeeds(feedsToLoad);
 
