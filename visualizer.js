@@ -30,10 +30,6 @@ Object.values(layers).forEach(layer => layer.addTo(map));
 
 // Performance settings
 const performanceSettings = {
-    maxVehiclesWithoutClustering: 100,
-    maxStationsWithoutClustering: 50,
-    minZoomForVehicles: 12,
-    minZoomForAllMarkers: 10,
     virtualStationZoomThreshold: 14
 };
 
@@ -52,22 +48,7 @@ map.on('zoomend', function() {
     zoomDebounceTimeout = setTimeout(() => {
         const currentZoom = map.getZoom();
 
-        // Show/hide vehicles based on zoom level
-        if (vehicleData.length > performanceSettings.maxVehiclesWithoutClustering) {
-            if (currentZoom < performanceSettings.minZoomForVehicles) {
-                if (map.hasLayer(layers.vehicles)) {
-                    map.removeLayer(layers.vehicles);
-                }
-            } else {
-                if (!map.hasLayer(layers.vehicles)) {
-                    // Check if vehicles layer should be visible based on checkbox
-                    const vehiclesToggle = document.getElementById('vehiclesToggle');
-                    if (vehiclesToggle && vehiclesToggle.checked) {
-                        map.addLayer(layers.vehicles);
-                    }
-                }
-            }
-        }
+        // Vehicles are now always visible thanks to clustering - no need to hide them
 
         // Only refresh virtual stations if we cross the threshold
         const newDisplayMode = currentZoom < performanceSettings.virtualStationZoomThreshold ? 'centroid' : 'polygon';
@@ -175,6 +156,55 @@ function createVirtualStationPopup(station, status) {
         popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
     }
 
+    // Add pricing information for available vehicle types (only if vehicles are actually available)
+    if (status && status.vehicle_types_available && status.vehicle_types_available.length > 0 &&
+        status.vehicle_types_available.some(vt => vt.count > 0)) {
+        popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+        popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Available Vehicle Pricing</div>`;
+
+        status.vehicle_types_available.forEach(vehicleTypeStatus => {
+            // Only show vehicle types that actually have vehicles available
+            if (vehicleTypeStatus.count > 0) {
+                const vehicleTypeName = getVehicleTypeName(vehicleTypeStatus.vehicle_type_id);
+                const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicleTypeStatus.vehicle_type_id);
+
+                if (vehicleType && vehicleType.default_pricing_plan_id) {
+                    const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id).substring(3); // Remove " • " prefix
+                    if (pricingInfo) {
+                        popupContent += `<div style="color: #388E3C; font-size: 11px; margin: 2px 0;">`;
+                        popupContent += `<strong>${vehicleTypeName.split('(')[0].trim()}</strong> (${vehicleTypeStatus.count} available): ${pricingInfo}`;
+                        popupContent += `</div>`;
+                    }
+                }
+            }
+        });
+
+        popupContent += `</div>`;
+    } else if (station.vehicle_types_capacity && station.vehicle_types_capacity.length > 0 &&
+              status && status.num_vehicles_available > 0) {
+        // Only show pricing fallback if we know there are vehicles available (but no detailed breakdown)
+        popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+        popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Vehicle Type Pricing</div>`;
+
+        station.vehicle_types_capacity.forEach(vehicleTypeCapacity => {
+            vehicleTypeCapacity.vehicle_type_ids.forEach(vehicleTypeId => {
+                const vehicleTypeName = getVehicleTypeName(vehicleTypeId);
+                const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicleTypeId);
+
+                if (vehicleType && vehicleType.default_pricing_plan_id) {
+                    const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id).substring(3); // Remove " • " prefix
+                    if (pricingInfo) {
+                        popupContent += `<div style="color: #388E3C; font-size: 11px; margin: 2px 0;">`;
+                        popupContent += `<strong>${vehicleTypeName.split('(')[0].trim()}</strong>: ${pricingInfo}`;
+                        popupContent += `</div>`;
+                    }
+                }
+            });
+        });
+
+        popupContent += `</div>`;
+    }
+
     popupContent += `</div>`;
     return popupContent;
 }
@@ -182,11 +212,98 @@ function createVirtualStationPopup(station, status) {
 // GBFS Loader instance
 const gbfsLoader = new GBFSLoader();
 
+// Helper function to show error messages
+function showError(message) {
+    const errorMessage = document.getElementById('errorMessage');
+    errorMessage.textContent = message;
+    errorMessage.classList.add('active');
+}
+
+// Deep link functionality - load system from URL parameter
+function checkForDeepLink() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const gbfsUrl = urlParams.get('gbfs') || urlParams.get('url');
+
+    if (gbfsUrl) {
+        console.log('Deep link detected, loading system:', gbfsUrl);
+
+        // Validate URL format
+        try {
+            new URL(gbfsUrl);
+
+            // Set the URL input field and load the system
+            const urlInput = document.getElementById('gbfsUrlInput');
+            if (urlInput) {
+                urlInput.value = gbfsUrl;
+
+                // Trigger the input event to enable copy button
+                urlInput.dispatchEvent(new Event('input'));
+
+                // Auto-load the system
+                loadGBFSFromUrl();
+            }
+        } catch (error) {
+            console.error('Invalid GBFS URL in deep link:', gbfsUrl);
+            showError(`Invalid GBFS URL in link: ${gbfsUrl}`);
+        }
+    }
+}
+
+// Update URL parameters
+function updateUrlParameters(gbfsUrl) {
+    const currentUrl = new URL(window.location.href);
+    if (gbfsUrl && gbfsUrl.trim()) {
+        currentUrl.searchParams.set('gbfs', gbfsUrl);
+    } else {
+        currentUrl.searchParams.delete('gbfs');
+    }
+    // Update browser history without triggering a reload
+    window.history.replaceState({}, '', currentUrl.toString());
+}
+
+// Generate shareable link for current system
+function generateShareableLink() {
+    const urlInput = document.getElementById('gbfsUrlInput');
+    if (!urlInput || !urlInput.value) {
+        return null;
+    }
+
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.set('gbfs', urlInput.value);
+    return currentUrl.toString();
+}
+
+// Shared function for loading GBFS from URL
+async function loadGBFSFromUrl() {
+    const url = document.getElementById('gbfsUrlInput').value.trim();
+    if (!url) {
+        const errorMessage = document.getElementById('errorMessage');
+        errorMessage.textContent = 'Please enter a GBFS URL';
+        errorMessage.classList.add('active');
+        return;
+    }
+
+    try {
+        const discovery = await gbfsLoader.loadFromPath(url);
+        await loadGBFSSystem(gbfsLoader.gbfsData, url);
+
+        // Update copy button state
+        const copyButton = document.getElementById('copyLinkButton');
+        copyButton.disabled = false;
+        copyButton.style.background = '#6c757d';
+    } catch (error) {
+        const errorMessage = document.getElementById('errorMessage');
+        errorMessage.textContent = `Error loading from URL: ${error.message}`;
+        errorMessage.classList.add('active');
+    }
+}
+
 // Store for all data
 let allZones = [];
 let stationData = [];
 let vehicleData = [];
 let vehicleTypesData = [];
+let pricingPlansData = [];
 
 // Helper function to check if a point is inside a polygon
 function isPointInPolygon(point, polygon) {
@@ -620,6 +737,66 @@ function loadStations(stationInfo, stationStatus) {
                 popupContent += `<div><strong>Address:</strong> ${station.address}</div>`;
             }
 
+            // Add pricing information for available vehicle types (only if vehicles are actually available)
+            if (status && status.vehicle_types_available && status.vehicle_types_available.length > 0 &&
+                status.vehicle_types_available.some(vt => vt.count > 0)) {
+                popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+                popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Available Vehicle Pricing</div>`;
+
+                status.vehicle_types_available.forEach(vehicleTypeStatus => {
+                    // Only show vehicle types that actually have vehicles available
+                    if (vehicleTypeStatus.count > 0) {
+                        const vehicleTypeName = getVehicleTypeName(vehicleTypeStatus.vehicle_type_id);
+                        const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicleTypeStatus.vehicle_type_id);
+
+
+                        if (vehicleType && vehicleType.default_pricing_plan_id) {
+                            const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id);
+                            const cleanPricingInfo = pricingInfo.substring(3); // Remove " • " prefix
+
+                            if (cleanPricingInfo) {
+                                popupContent += `<div style="color: #388E3C; font-size: 11px; margin: 2px 0;">`;
+                                popupContent += `<strong>${vehicleTypeName.split('(')[0].trim()}</strong> (${vehicleTypeStatus.count} available): ${cleanPricingInfo}`;
+
+                                // Add explanation for unusual pricing structure
+                                if (cleanPricingInfo.includes('⚠️')) {
+                                    popupContent += `<div style="color: #ff8c00; font-size: 10px; font-style: italic; margin-left: 10px;">`;
+                                    popupContent += `⚠️ Unusual pricing: registration fee + per-trip costs`;
+                                    popupContent += `</div>`;
+                                }
+
+                                popupContent += `</div>`;
+                            }
+                        }
+                    }
+                });
+
+                popupContent += `</div>`;
+            } else if (station.vehicle_types_capacity && station.vehicle_types_capacity.length > 0 &&
+                      status && status.num_vehicles_available > 0) {
+                // Only show pricing fallback if we know there are vehicles available (but no detailed breakdown)
+                popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+                popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Vehicle Type Pricing</div>`;
+
+                station.vehicle_types_capacity.forEach(vehicleTypeCapacity => {
+                    vehicleTypeCapacity.vehicle_type_ids.forEach(vehicleTypeId => {
+                        const vehicleTypeName = getVehicleTypeName(vehicleTypeId);
+                        const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicleTypeId);
+
+                        if (vehicleType && vehicleType.default_pricing_plan_id) {
+                            const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id).substring(3); // Remove " • " prefix
+                            if (pricingInfo) {
+                                popupContent += `<div style="color: #388E3C; font-size: 11px; margin: 2px 0;">`;
+                                popupContent += `<strong>${vehicleTypeName.split('(')[0].trim()}</strong>: ${pricingInfo}`;
+                                popupContent += `</div>`;
+                            }
+                        }
+                    });
+                });
+
+                popupContent += `</div>`;
+            }
+
             popupContent += `</div>`;
 
             let mapElement;
@@ -729,15 +906,7 @@ function loadVehicles(data) {
 
         const vehicles = data.data.vehicles;
 
-        // Performance optimization: limit vehicles shown at low zoom levels
-        const currentZoom = map.getZoom();
-        const shouldShowVehicles = currentZoom >= performanceSettings.minZoomForVehicles ||
-                                 vehicles.length <= performanceSettings.maxVehiclesWithoutClustering;
-
-        if (!shouldShowVehicles) {
-            console.log(`Skipping ${vehicles.length} vehicles at zoom level ${currentZoom}. Zoom in to see vehicles.`);
-            return vehicles.length;
-        }
+        // Vehicles are always loaded - clustering handles performance automatically
 
         vehicles.forEach(vehicle => {
             if (vehicle.lat && vehicle.lon) {
@@ -751,7 +920,28 @@ function loadVehicles(data) {
                 popupContent += `<h4>Vehicle ${vehicle.vehicle_id}</h4>`;
 
                 if (vehicle.vehicle_type_id) {
-                    popupContent += `<div><strong>Type:</strong> ${vehicle.vehicle_type_id}</div>`;
+                    const vehicleTypeName = getVehicleTypeName(vehicle.vehicle_type_id);
+                    popupContent += `<div><strong>Type:</strong> ${vehicleTypeName}</div>`;
+
+                    // Add pricing information for this vehicle type
+                    const vehicleType = vehicleTypesData.find(vt => vt.vehicle_type_id === vehicle.vehicle_type_id);
+                    if (vehicleType && vehicleType.default_pricing_plan_id) {
+                        const pricingInfo = formatPricingInfo(vehicleType.default_pricing_plan_id).substring(3); // Remove " • " prefix
+                        if (pricingInfo) {
+                            popupContent += `<div style="background: #e8f5e8; padding: 6px; border-radius: 4px; margin: 8px 0; border-left: 3px solid #4CAF50;">`;
+                            popupContent += `<div style="font-weight: 500; color: #2E7D32; font-size: 12px;">💰 Pricing</div>`;
+                            popupContent += `<div style="color: #388E3C; font-size: 11px;">${pricingInfo}</div>`;
+
+                            // Add explanation for unusual pricing structure
+                            if (pricingInfo.includes('⚠️')) {
+                                popupContent += `<div style="color: #ff8c00; font-size: 10px; font-style: italic; margin-top: 4px;">`;
+                                popupContent += `⚠️ Unusual pricing: registration fee + per-trip costs`;
+                                popupContent += `</div>`;
+                            }
+
+                            popupContent += `</div>`;
+                        }
+                    }
                 }
                 if (vehicle.is_reserved !== undefined) {
                     popupContent += `<div><strong>Reserved:</strong> ${vehicle.is_reserved ? 'Yes' : 'No'}</div>`;
@@ -806,6 +996,102 @@ function loadVehicleTypes(data) {
         console.error('Error loading vehicle types:', error);
         throw error;
     }
+}
+
+// Load and store pricing plans data
+function loadPricingPlans(data) {
+    pricingPlansData = [];
+
+    try {
+        if (!data || !data.data || !data.data.plans) {
+            console.log('No pricing plans data found');
+            return;
+        }
+
+        pricingPlansData = data.data.plans;
+        console.log(`Loaded ${pricingPlansData.length} pricing plans`);
+
+    } catch (error) {
+        console.error('Error loading pricing plans:', error);
+        throw error;
+    }
+}
+
+// Get pricing plan by ID
+function getPricingPlan(planId) {
+    if (!pricingPlansData || pricingPlansData.length === 0) {
+        return null;
+    }
+
+    return pricingPlansData.find(plan => plan.plan_id === planId);
+}
+
+// Format pricing information for display
+function formatPricingInfo(planId) {
+    const plan = getPricingPlan(planId);
+    if (!plan) return '';
+
+    const parts = [];
+    let hasUnusualStructure = false;
+
+    // Detect unusual pricing structure: price field + per_min_pricing with interval: 0
+    const hasRegistrationFee = plan.price && plan.price > 0;
+    const hasUnlockInPerMin = plan.per_min_pricing &&
+                              plan.per_min_pricing.some(segment => segment.interval === 0);
+
+    if (hasRegistrationFee && hasUnlockInPerMin) {
+        hasUnusualStructure = true;
+
+        // Registration fee (one-time)
+        parts.push(`${plan.price} ${plan.currency} registration`);
+
+        // Find unlock fee (interval: 0) and per-minute rate (interval > 0)
+        const unlockSegment = plan.per_min_pricing.find(segment => segment.interval === 0);
+        const perMinSegment = plan.per_min_pricing.find(segment => segment.interval > 0);
+
+        if (unlockSegment) {
+            parts.push(`${unlockSegment.rate} ${plan.currency} unlock`);
+        }
+
+        if (perMinSegment) {
+            parts.push(`${perMinSegment.rate} ${plan.currency}/min`);
+        }
+    } else {
+        // Standard pricing structure
+
+        // Base price (standard unlock fee)
+        if (plan.price && plan.price > 0) {
+            parts.push(`${plan.price} ${plan.currency} unlock`);
+        }
+
+        // Per minute pricing - find the main recurring rate (interval > 0)
+        if (plan.per_min_pricing && plan.per_min_pricing.length > 0) {
+            // Look for a segment with interval > 0 (recurring pricing)
+            const recurringSegment = plan.per_min_pricing.find(segment => segment.interval > 0);
+            const perMin = recurringSegment || plan.per_min_pricing[0]; // Fallback to first segment
+            parts.push(`${perMin.rate} ${plan.currency}/min`);
+        }
+    }
+
+    // Per km pricing
+    if (plan.per_km_pricing && plan.per_km_pricing.length > 0) {
+        const perKm = plan.per_km_pricing[0]; // Use first segment
+        parts.push(`${perKm.rate} ${plan.currency}/km`);
+    }
+
+    // Surge pricing indicator
+    if (plan.surge_pricing) {
+        parts.push('⚡ Surge pricing');
+    }
+
+    let result = parts.length > 0 ? ` • ${parts.join(' + ')}` : '';
+
+    // Add unusual structure flag
+    if (hasUnusualStructure) {
+        result += ' ⚠️';
+    }
+
+    return result;
 }
 
 // Get vehicle type name by ID with rich metadata
@@ -893,26 +1179,31 @@ function getVehicleTypeName(vehicleTypeId) {
         return otherParts.join(' ') === typeDescription;
     });
 
+    // Add pricing information if available
+    const pricingInfo = vehicleType.default_pricing_plan_id
+        ? formatPricingInfo(vehicleType.default_pricing_plan_id)
+        : '';
+
     if (label && typeDescription !== label) {
         // Show both name and type description if they're different
         if (duplicateNames.length > 1) {
-            return `${label} (${typeDescription}) [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+            return `${label} (${typeDescription})${pricingInfo} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
         } else {
-            return `${label} (${typeDescription})`;
+            return `${label} (${typeDescription})${pricingInfo}`;
         }
     } else if (label) {
         // Just the name, but add ID if there are duplicates with same name
         if (duplicateNames.length > 1) {
-            return `${label} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+            return `${label}${pricingInfo} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
         } else {
-            return label;
+            return `${label}${pricingInfo}`;
         }
     } else {
         // No name available, use type description
         if (duplicateNames.length > 1) {
-            return `${typeDescription} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
+            return `${typeDescription}${pricingInfo} [${vehicleTypeId.split(':').pop() || vehicleTypeId}]`;
         } else {
-            return typeDescription;
+            return `${typeDescription}${pricingInfo}`;
         }
     }
 }
@@ -953,6 +1244,8 @@ function updateSystemInfo(systemInfo) {
     if (systemInfo.phone_number) {
         html += `<div class="info-row"><span class="info-label">Phone:</span><span class="info-value">${systemInfo.phone_number}</span></div>`;
     }
+
+    // Pricing information is now shown in station and vehicle popups for better context
 
     infoDiv.innerHTML = html || '<p style="color: #999; font-size: 13px;">Limited system information available</p>';
 }
@@ -1089,6 +1382,7 @@ async function loadGBFSSystem(data, sourcePath = '') {
         stationData = [];
         vehicleData = [];
         vehicleTypesData = [];
+        pricingPlansData = [];
 
         // Hide all legend sections
         document.getElementById('zoneLegend').style.display = 'none';
@@ -1109,7 +1403,8 @@ async function loadGBFSSystem(data, sourcePath = '') {
             'station_information',
             'station_status',
             'vehicle_status',
-            'vehicle_types'
+            'vehicle_types',
+            'system_pricing_plans'
         ].filter(feed => availableFeeds.includes(feed));
 
         // Update loading indicator with feed count
@@ -1139,16 +1434,22 @@ async function loadGBFSSystem(data, sourcePath = '') {
             }
         }
 
+        // Load vehicle types and pricing plans first, before stations and vehicles (so popups can show pricing)
+        if (results.vehicle_types) {
+            loadVehicleTypes(results.vehicle_types);
+        }
+
+        if (results.system_pricing_plans) {
+            loadPricingPlans(results.system_pricing_plans);
+        }
+
+        // Now load stations and vehicles (popups can access vehicle types and pricing data)
         if (results.station_information) {
             counts.stations = loadStations(results.station_information, results.station_status);
         }
 
         if (results.vehicle_status) {
             counts.vehicles = loadVehicles(results.vehicle_status);
-        }
-
-        if (results.vehicle_types) {
-            loadVehicleTypes(results.vehicle_types);
         }
 
         // Update UI
@@ -1237,6 +1538,8 @@ document.getElementById('gbfsFileInput').addEventListener('change', async functi
     const files = e.target.files;
     if (files && files.length > 0) {
         try {
+            // Clear URL parameter when loading from files
+            updateUrlParameters('');
             const discovery = await gbfsLoader.loadFromFiles(files);
             await loadGBFSSystem(gbfsLoader.gbfsData, 'LOCAL_FILES');
         } catch (error) {
@@ -1248,30 +1551,64 @@ document.getElementById('gbfsFileInput').addEventListener('change', async functi
 });
 
 // Handle URL loading
-document.getElementById('loadFromUrl').addEventListener('click', async function() {
-    const url = document.getElementById('gbfsUrlInput').value.trim();
-    if (!url) {
-        const errorMessage = document.getElementById('errorMessage');
-        errorMessage.textContent = 'Please enter a GBFS URL';
-        errorMessage.classList.add('active');
-        return;
-    }
-
-    try {
-        const discovery = await gbfsLoader.loadFromPath(url);
-        await loadGBFSSystem(gbfsLoader.gbfsData, url);
-    } catch (error) {
-        const errorMessage = document.getElementById('errorMessage');
-        errorMessage.textContent = `Error loading from URL: ${error.message}`;
-        errorMessage.classList.add('active');
-    }
-});
+document.getElementById('loadFromUrl').addEventListener('click', loadGBFSFromUrl);
 
 // Allow Enter key to trigger URL loading
 document.getElementById('gbfsUrlInput').addEventListener('keypress', function(e) {
     if (e.key === 'Enter') {
         document.getElementById('loadFromUrl').click();
     }
+});
+
+// Monitor URL input to enable/disable copy link button and update URL parameters
+document.getElementById('gbfsUrlInput').addEventListener('input', function(e) {
+    const copyButton = document.getElementById('copyLinkButton');
+    const hasUrl = e.target.value.trim().length > 0;
+    copyButton.disabled = !hasUrl;
+    copyButton.style.background = hasUrl ? '#6c757d' : '#e0e0e0';
+
+    // Update URL parameters when input changes
+    updateUrlParameters(e.target.value.trim());
+});
+
+// Copy link button functionality
+document.getElementById('copyLinkButton').addEventListener('click', function() {
+    const shareableLink = generateShareableLink();
+    if (shareableLink) {
+        navigator.clipboard.writeText(shareableLink).then(() => {
+            const button = document.getElementById('copyLinkButton');
+            const originalText = button.textContent;
+            button.textContent = '✓ Copied!';
+            button.style.background = '#28a745';
+
+            setTimeout(() => {
+                button.textContent = '📋';
+                button.style.background = '#6c757d';
+            }, 2000);
+        }).catch(err => {
+            console.error('Failed to copy link:', err);
+            // Fallback for older browsers
+            const textArea = document.createElement('textarea');
+            textArea.value = shareableLink;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+
+            const button = document.getElementById('copyLinkButton');
+            button.textContent = '✓ Copied!';
+            button.style.background = '#28a745';
+            setTimeout(() => {
+                button.textContent = '📋';
+                button.style.background = '#6c757d';
+            }, 2000);
+        });
+    }
+});
+
+// Initialize deep link functionality on page load
+document.addEventListener('DOMContentLoaded', function() {
+    checkForDeepLink();
 });
 
 // Page is ready for user to load GBFS data
