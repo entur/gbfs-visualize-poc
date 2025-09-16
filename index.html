@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GBFS Geofencing Zones Visualizer</title>
+    <title>GBFS System Visualizer</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body {
@@ -26,13 +26,23 @@
             padding: 15px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            max-width: 350px;
+            width: 350px;
+            max-height: 90vh;
+            overflow-y: auto;
         }
 
         .controls h2 {
             margin: 0 0 15px 0;
             font-size: 18px;
             color: #333;
+        }
+
+        .controls h3 {
+            margin: 15px 0 10px 0;
+            font-size: 16px;
+            color: #555;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
         }
 
         .controls label {
@@ -66,6 +76,71 @@
             background: #45a049;
         }
 
+        .controls button:disabled {
+            background: #e0e0e0;
+            color: #666;
+            cursor: not-allowed;
+        }
+
+        .system-info {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 15px;
+            font-size: 13px;
+        }
+
+        .system-info .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .system-info .info-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .system-info .info-value {
+            color: #333;
+        }
+
+        .layer-controls {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        .layer-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+
+        .layer-item input[type="checkbox"] {
+            margin-right: 10px;
+        }
+
+        .layer-item label {
+            display: flex;
+            align-items: center;
+            margin: 0;
+            flex-grow: 1;
+            cursor: pointer;
+        }
+
+        .layer-count {
+            background: #e0e0e0;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #666;
+        }
+
         .stats {
             margin-top: 15px;
             padding-top: 15px;
@@ -84,6 +159,7 @@
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             font-size: 14px;
+            max-width: 250px;
         }
 
         .legend h3 {
@@ -92,10 +168,25 @@
             color: #333;
         }
 
+        .legend-section {
+            margin-bottom: 15px;
+        }
+
+        .legend-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .legend-section h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: #666;
+            font-weight: 600;
+        }
+
         .legend-item {
             display: flex;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
 
         .legend-color {
@@ -106,9 +197,20 @@
             border: 1px solid #ccc;
         }
 
+        .legend-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
         .popup-content {
             font-size: 14px;
             line-height: 1.5;
+            max-width: 300px;
         }
 
         .popup-content h4 {
@@ -146,47 +248,181 @@
         .rule-value.forbidden {
             color: #f44336;
         }
+
+        .loading-indicator {
+            display: none;
+            text-align: center;
+            padding: 10px;
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            margin-top: 10px;
+            color: #856404;
+        }
+
+        .loading-indicator.active {
+            display: block;
+        }
+
+        .error-message {
+            display: none;
+            padding: 10px;
+            background: #f8d7da;
+            border: 1px solid #dc3545;
+            border-radius: 4px;
+            margin-top: 10px;
+            color: #721c24;
+        }
+
+        .error-message.active {
+            display: block;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .tab {
+            padding: 8px 12px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            color: #333;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            color: #000;
+            background: rgba(0,0,0,0.05);
+        }
+
+        .tab.active {
+            color: #2E7D32;
+            border-bottom-color: #4CAF50;
+            font-weight: 600;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
     <div id="map"></div>
 
     <div class="controls">
-        <h2>GBFS Geofencing Zones Visualizer</h2>
-        <label>
-            Select GBFS geofencing_zones.json file:
-            <input type="file" id="fileInput" accept=".json">
-        </label>
-        <div class="stats" id="stats">
-            <div>No data loaded</div>
+        <h2>GBFS System Visualizer</h2>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="load">Load</button>
+            <button class="tab" data-tab="layers">Layers</button>
+            <button class="tab" data-tab="info">Info</button>
+        </div>
+
+        <div class="tab-content active" id="load-tab">
+            <h3>Load GBFS System</h3>
+
+            <div style="margin-bottom: 20px;">
+                <label>
+                    <strong>Option 1:</strong> Load from URL (recommended for live systems):
+                    <input type="url" id="gbfsUrlInput" placeholder="https://example.com/gbfs.json" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-top: 5px;">
+                </label>
+                <button id="loadFromUrl" style="margin-top: 10px;">Load from URL</button>
+            </div>
+
+            <div style="border-top: 1px solid #eee; padding-top: 20px;">
+                <label>
+                    <strong>Option 2:</strong> Load local files (select multiple files):
+                    <input type="file" id="gbfsFileInput" accept=".json" multiple style="margin-top: 5px;">
+                </label>
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                    Select gbfs.json and all related feed files (station_information.json, vehicle_status.json, etc.)
+                </div>
+            </div>
+
+            <div class="loading-indicator" id="loadingIndicator">
+                Loading GBFS data...
+            </div>
+
+            <div class="error-message" id="errorMessage"></div>
+        </div>
+
+        <div class="tab-content" id="layers-tab">
+            <h3>Data Layers</h3>
+            <div class="layer-controls" id="layerControls">
+                <p style="color: #999; font-size: 13px;">Load a GBFS system first</p>
+            </div>
+        </div>
+
+        <div class="tab-content" id="info-tab">
+            <h3>System Information</h3>
+            <div class="system-info" id="systemInfo">
+                <p style="color: #999; font-size: 13px;">No system loaded</p>
+            </div>
+
+            <h3>Statistics</h3>
+            <div class="stats" id="stats">
+                <p style="color: #999; font-size: 13px;">No data loaded</p>
+            </div>
         </div>
     </div>
 
     <div class="legend">
-        <h3>Zone Types</h3>
-        <div class="legend-item">
-            <div class="legend-color" style="background: rgba(76, 175, 80, 0.3); border-color: #4CAF50;"></div>
-            <span>Station Parking Required</span>
+        <h3>Map Legend</h3>
+
+        <div class="legend-section" id="stationLegend" style="display: none;">
+            <h4>Stations</h4>
+            <div class="legend-item">
+                <div class="legend-icon">📍</div>
+                <span>Bike Station</span>
+            </div>
         </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: rgba(156, 39, 176, 0.3); border-color: #9C27B0;"></div>
-            <span>Transit Only (No Start/End)</span>
+
+        <div class="legend-section" id="vehicleLegend" style="display: none;">
+            <h4>Vehicles</h4>
+            <div class="legend-item">
+                <div class="legend-icon">🛴</div>
+                <span>Available Vehicle</span>
+            </div>
         </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: rgba(255, 193, 7, 0.3); border-color: #FFC107;"></div>
-            <span>Speed Limited Zone</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: rgba(244, 67, 54, 0.3); border-color: #f44336;"></div>
-            <span>No Ride Zone</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: rgba(33, 150, 243, 0.3); border-color: #2196F3;"></div>
-            <span>Standard Zone</span>
+
+        <div class="legend-section" id="zoneLegend" style="display: none;">
+            <h4>Geofencing Zones</h4>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(76, 175, 80, 0.3); border-color: #4CAF50;"></div>
+                <span>Station Parking</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(156, 39, 176, 0.3); border-color: #9C27B0;"></div>
+                <span>Transit Only</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(255, 193, 7, 0.3); border-color: #FFC107;"></div>
+                <span>Speed Limited</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(244, 67, 54, 0.3); border-color: #f44336;"></div>
+                <span>No Ride Zone</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: rgba(33, 150, 243, 0.3); border-color: #2196F3;"></div>
+                <span>Standard Zone</span>
+            </div>
         </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="gbfs-loader.js"></script>
     <script src="visualizer.js"></script>
 </body>
 </html>
