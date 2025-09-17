@@ -300,6 +300,7 @@ async function loadGBFSFromUrl() {
 
 // Store for all data
 let allZones = [];
+let globalRules = [];
 let stationData = [];
 let vehicleData = [];
 let vehicleTypesData = [];
@@ -429,6 +430,29 @@ function analyzeVehicleTypePrecedence(features) {
         });
     });
 
+    // Add global rules (lowest precedence - after all polygon rules)
+    if (globalRules && globalRules.length > 0) {
+        globalRules.forEach((rule, ruleIndex) => {
+            const vehicleTypes = rule.vehicle_type_ids && rule.vehicle_type_ids.length > 0
+                ? rule.vehicle_type_ids
+                : ['*']; // '*' represents universal rules
+
+            vehicleTypes.forEach(vehicleType => {
+                if (!vehicleTypeRules.has(vehicleType)) {
+                    vehicleTypeRules.set(vehicleType, []);
+                }
+
+                vehicleTypeRules.get(vehicleType).push({
+                    zoneIndex: -1, // Special indicator for global rules
+                    ruleIndex,
+                    zoneName: 'Global Rule',
+                    rule,
+                    precedenceScore: 999999 + ruleIndex // Very high score = lowest precedence
+                });
+            });
+        });
+    }
+
     // Sort rules by precedence for each vehicle type
     vehicleTypeRules.forEach((rules, vehicleType) => {
         rules.sort((a, b) => a.precedenceScore - b.precedenceScore);
@@ -441,10 +465,32 @@ function analyzeVehicleTypePrecedence(features) {
 function createZonePopupContent(features) {
     let html = `<div class="popup-content">`;
 
-    if (features.length === 1) {
+    // Check if we should show global rules
+    const hasGlobalRules = globalRules && globalRules.length > 0;
+
+    if (features.length === 0 && hasGlobalRules) {
+        // Show only global rules
+        html += `<h4>🌍 Global Rules Apply Here</h4>`;
+        html += `<div style="background: #e8f5e8; border: 1px solid #4CAF50; border-radius: 4px; padding: 8px; margin-bottom: 10px; font-size: 12px;">`;
+        html += `<strong>Global rules apply everywhere in the system.</strong>`;
+        html += `</div>`;
+
+        globalRules.forEach((rule, index) => {
+            html += `<div style="background: #f8f9fa; border-left: 4px solid #28a745; padding: 8px; margin-bottom: 8px; border-radius: 0 4px 4px 0;">`;
+            html += `<div style="font-weight: bold; color: #28a745; font-size: 12px; margin-bottom: 4px;">Global Rule ${index + 1}</div>`;
+            html += createRuleDetails(rule);
+            html += `</div>`;
+        });
+    } else if (features.length === 1 && !hasGlobalRules) {
+        // Single zone, no global rules - use simple display
         html += createZoneInfo(features[0]);
     } else {
-        html += `<h4 style="color: #ff6b6b;">⚠ ${features.length} Overlapping Zones</h4>`;
+        // Multiple zones OR single zone with global rules - use precedence analysis
+        if (features.length > 1) {
+            html += `<h4 style="color: #ff6b6b;">⚠ ${features.length} Overlapping Zones</h4>`;
+        } else {
+            html += `<h4>${features[0].properties.name?.[0]?.text || 'Zone'} + Global Rules</h4>`;
+        }
 
         // Analyze vehicle type precedence
         const vehicleTypePrecedence = analyzeVehicleTypePrecedence(features);
@@ -527,17 +573,25 @@ function createZonePopupContent(features) {
 
 // Load and display geofencing zones
 function loadGeofencingZones(data) {
-    // Clear existing zones
+    // Clear existing zones and global rules
     layers.zones.clearLayers();
     allZones = [];
+    globalRules = [];
 
     try {
         if (!data.data || !data.data.geofencing_zones) {
             console.log('No geofencing zones data found');
-            return 0;
+            return { zones: 0, globalRules: 0 };
         }
 
         const geofencingZones = data.data.geofencing_zones;
+
+        // Parse global rules if they exist
+        if (geofencingZones.global_rules && geofencingZones.global_rules.length > 0) {
+            globalRules = geofencingZones.global_rules;
+            console.log(`Loaded ${globalRules.length} global rules`);
+        }
+
         const features = geofencingZones.features;
 
         let zoneCount = 0;
@@ -619,11 +673,11 @@ function loadGeofencingZones(data) {
         // Show/hide legend based on zones
         document.getElementById('zoneLegend').style.display = zoneCount > 0 ? 'block' : 'none';
 
-        return zoneCount;
+        return { zones: zoneCount, globalRules: globalRules.length };
 
     } catch (error) {
         console.error('Error loading geofencing zones:', error);
-        throw error;
+        return { zones: 0, globalRules: 0 };
     }
 }
 
@@ -1355,6 +1409,9 @@ function updateStats(counts) {
 
     if (counts.zones !== undefined) {
         html += `<div class="info-row"><span class="info-label">Geofencing Zones:</span><span class="info-value">${counts.zones}</span></div>`;
+        if (counts.globalRules && counts.globalRules > 0) {
+            html += `<div class="info-row"><span class="info-label">Global Rules:</span><span class="info-value">${counts.globalRules}</span></div>`;
+        }
     }
 
     if (counts.stationParking !== undefined) {
@@ -1504,7 +1561,9 @@ async function loadGBFSSystem(data, sourcePath = '') {
 
         // Process loaded data
         if (results.geofencing_zones) {
-            counts.zones = loadGeofencingZones(results.geofencing_zones);
+            const zoneResult = loadGeofencingZones(results.geofencing_zones);
+            counts.zones = zoneResult.zones;
+            counts.globalRules = zoneResult.globalRules;
 
             // Calculate zone statistics
             if (allZones.length > 0) {
