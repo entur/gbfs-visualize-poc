@@ -1120,7 +1120,9 @@ function formatPricingInfo(planId) {
         }
 
         if (perMinSegment) {
-            parts.push(`${perMinSegment.rate} ${plan.currency}/min`);
+            // Calculate actual per-minute rate considering interval
+            const actualRate = perMinSegment.interval > 0 ? (perMinSegment.rate / perMinSegment.interval).toFixed(2) : perMinSegment.rate;
+            parts.push(`${actualRate} ${plan.currency}/min`);
         }
     } else {
         // Standard pricing structure
@@ -1135,14 +1137,32 @@ function formatPricingInfo(planId) {
             // Look for a segment with interval > 0 (recurring pricing)
             const recurringSegment = plan.per_min_pricing.find(segment => segment.interval > 0);
             const perMin = recurringSegment || plan.per_min_pricing[0]; // Fallback to first segment
-            parts.push(`${perMin.rate} ${plan.currency}/min`);
+
+            // Calculate actual per-minute rate considering interval
+            const actualRate = perMin.interval > 0 ? (perMin.rate / perMin.interval).toFixed(2) : perMin.rate;
+
+            // Show the calculation if interval is not 1
+            if (perMin.interval > 1) {
+                parts.push(`${actualRate} ${plan.currency}/min (${perMin.rate}/${perMin.interval}min)`);
+            } else {
+                parts.push(`${actualRate} ${plan.currency}/min`);
+            }
         }
     }
 
     // Per km pricing
     if (plan.per_km_pricing && plan.per_km_pricing.length > 0) {
         const perKm = plan.per_km_pricing[0]; // Use first segment
-        parts.push(`${perKm.rate} ${plan.currency}/km`);
+
+        // Calculate actual per-km rate considering interval
+        const actualRate = perKm.interval > 0 ? (perKm.rate / perKm.interval).toFixed(2) : perKm.rate;
+
+        // Show the calculation if interval is not 1
+        if (perKm.interval > 1) {
+            parts.push(`${actualRate} ${plan.currency}/km (${perKm.rate}/${perKm.interval}km)`);
+        } else {
+            parts.push(`${actualRate} ${plan.currency}/km`);
+        }
     }
 
     // Surge pricing indicator
