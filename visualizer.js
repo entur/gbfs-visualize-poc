@@ -691,11 +691,12 @@ function getVirtualStationStyle(status, currentZoom = map.getZoom()) {
 function loadStations(stationInfo, stationStatus) {
     layers.stations.clearLayers();
     stationData = [];
+    let physicalStationsWithPolygons = 0;
 
     try {
         if (!stationInfo || !stationInfo.data || !stationInfo.data.stations) {
             console.log('No station information found');
-            return 0;
+            return { count: 0, unusual: 0 };
         }
 
         const stations = stationInfo.data.stations;
@@ -844,12 +845,53 @@ function loadStations(stationInfo, stationStatus) {
 
             } else if (station.lat !== undefined && station.lon !== undefined) {
                 // Handle physical stations with point locations
-                mapElement = L.marker([station.lat, station.lon], {
-                    icon: createStationIcon(status)
-                });
 
-                mapElement.bindPopup(popupContent);
-                mapElement.addTo(layers.stations);
+                // Check if this physical station also has a polygon area (unusual!)
+                if (station.station_area && !station.is_virtual_station) {
+                    console.warn(`⚠️ Physical station ${station.station_id} has BOTH coordinates AND polygon area - this is unusual!`);
+                    physicalStationsWithPolygons++;
+
+                    // Create a layer group to hold both marker and polygon
+                    const stationGroup = L.layerGroup();
+
+                    // Add the main station marker
+                    const marker = L.marker([station.lat, station.lon], {
+                        icon: createStationIcon(status)
+                    });
+                    marker.bindPopup(popupContent + '<div style="color: #ff8c00; font-size: 11px; margin-top: 8px;">⚠️ This physical station has both point and polygon geometry</div>');
+                    stationGroup.addLayer(marker);
+
+                    // Add the polygon with a distinct style to show it's unusual
+                    const latLngs = station.station_area.coordinates.map(polygon =>
+                        polygon.map(ring =>
+                            ring.map(coord => [coord[1], coord[0]]) // Swap lng/lat to lat/lng
+                        )
+                    );
+
+                    const polygon = L.polygon(latLngs, {
+                        color: '#FF5722',  // Orange-red to indicate unusual
+                        weight: 2,
+                        opacity: 0.8,
+                        fillColor: '#FF5722',
+                        fillOpacity: 0.1,
+                        dashArray: '5, 5'  // Dashed line to show it's unusual
+                    });
+
+                    polygon.bindPopup(popupContent + '<div style="color: #ff8c00; font-size: 11px; margin-top: 8px;">⚠️ Polygon area for physical station (unusual)</div>');
+                    stationGroup.addLayer(polygon);
+
+                    stationGroup.addTo(layers.stations);
+                    mapElement = stationGroup;
+
+                } else {
+                    // Normal physical station with just point coordinates
+                    mapElement = L.marker([station.lat, station.lon], {
+                        icon: createStationIcon(status)
+                    });
+
+                    mapElement.bindPopup(popupContent);
+                    mapElement.addTo(layers.stations);
+                }
 
             } else {
                 console.warn(`Station ${station.station_id} has no location data (neither lat/lon nor station_area)`);
@@ -866,11 +908,15 @@ function loadStations(stationInfo, stationStatus) {
         // Show/hide legend based on stations
         document.getElementById('stationLegend').style.display = stations.length > 0 ? 'block' : 'none';
 
-        return stations.length;
+        if (physicalStationsWithPolygons > 0) {
+            console.warn(`⚠️ Found ${physicalStationsWithPolygons} physical stations with polygon areas (unusual!)`);
+        }
+
+        return { count: stations.length, unusual: physicalStationsWithPolygons };
 
     } catch (error) {
         console.error('Error loading stations:', error);
-        throw error;
+        return { count: 0, unusual: 0 };
     }
 }
 
@@ -1278,6 +1324,9 @@ function updateStats(counts) {
 
     if (counts.stations !== undefined) {
         html += `<div class="info-row"><span class="info-label">Stations:</span><span class="info-value">${counts.stations}</span></div>`;
+        if (counts.unusualStations && counts.unusualStations > 0) {
+            html += `<div class="info-row"><span class="info-label" style="color: #ff8c00;">⚠️ Physical w/ polygons:</span><span class="info-value" style="color: #ff8c00;">${counts.unusualStations}</span></div>`;
+        }
     }
 
     if (counts.vehicles !== undefined) {
@@ -1465,7 +1514,9 @@ async function loadGBFSSystem(data, sourcePath = '') {
 
         // Now load stations and vehicles (popups can access vehicle types and pricing data)
         if (results.station_information) {
-            counts.stations = loadStations(results.station_information, results.station_status);
+            const stationResult = loadStations(results.station_information, results.station_status);
+            counts.stations = stationResult.count;
+            counts.unusualStations = stationResult.unusual;
         }
 
         if (results.vehicle_status) {
