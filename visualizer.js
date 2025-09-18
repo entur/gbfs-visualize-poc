@@ -22,11 +22,17 @@ const layers = {
         zoomToBoundsOnClick: true,
         disableClusteringAtZoom: 16
     }),
+    vehicleTypes: {}, // Will store separate layer groups for each vehicle type
     regions: L.layerGroup()
 };
 
 // Add all layers to map (will be toggled via controls)
-Object.values(layers).forEach(layer => layer.addTo(map));
+Object.entries(layers).forEach(([key, layer]) => {
+    if (key !== 'vehicleTypes') {
+        layer.addTo(map);
+    }
+    // vehicleTypes layers will be added dynamically when data loads
+});
 
 // Performance settings
 const performanceSettings = {
@@ -1481,13 +1487,45 @@ function loadVehicles(data) {
     layers.vehicles.clearLayers();
     vehicleData = [];
 
+    // Clear existing vehicle type layers
+    Object.values(layers.vehicleTypes).forEach(layer => {
+        layer.clearLayers();
+        map.removeLayer(layer);
+    });
+    layers.vehicleTypes = {};
+
+    // Track vehicle counts by type
+    const vehicleTypeCounts = {};
+
     try {
         if (!data || !data.data || !data.data.vehicles) {
             console.log('No vehicle data found');
-            return 0;
+            return { total: 0, byType: {} };
         }
 
         const vehicles = data.data.vehicles;
+
+        // First pass: group vehicles by type and create layer groups
+        vehicles.forEach(vehicle => {
+            if (vehicle.lat !== undefined && vehicle.lon !== undefined) {
+                const vehicleTypeId = vehicle.vehicle_type_id || 'unknown';
+
+                if (!layers.vehicleTypes[vehicleTypeId]) {
+                    // Create new layer group for this vehicle type
+                    layers.vehicleTypes[vehicleTypeId] = L.markerClusterGroup({
+                        maxClusterRadius: 30,
+                        spiderfyOnMaxZoom: true,
+                        showCoverageOnHover: false,
+                        zoomToBoundsOnClick: true,
+                        disableClusteringAtZoom: 16
+                    });
+                    // Add to map by default (will be controlled by layer toggles)
+                    layers.vehicleTypes[vehicleTypeId].addTo(map);
+                    vehicleTypeCounts[vehicleTypeId] = 0;
+                }
+                vehicleTypeCounts[vehicleTypeId]++;
+            }
+        });
 
         // Vehicles are always loaded - clustering handles performance automatically
 
@@ -1562,11 +1600,19 @@ function loadVehicles(data) {
                 popupContent += `</div>`;
 
                 marker.bindPopup(popupContent);
+
+                // Add to both the general vehicles layer and the specific vehicle type layer
                 marker.addTo(layers.vehicles);
+
+                const vehicleTypeId = vehicle.vehicle_type_id || 'unknown';
+                if (layers.vehicleTypes[vehicleTypeId]) {
+                    marker.addTo(layers.vehicleTypes[vehicleTypeId]);
+                }
 
                 vehicleData.push({
                     vehicle: vehicle,
-                    marker: marker
+                    marker: marker,
+                    vehicleTypeId: vehicleTypeId
                 });
             }
         });
@@ -1574,7 +1620,7 @@ function loadVehicles(data) {
         // Show/hide legend based on vehicles
         document.getElementById('vehicleLegend').style.display = vehicles.length > 0 ? 'block' : 'none';
 
-        return vehicles.length;
+        return { total: vehicles.length, byType: vehicleTypeCounts };
 
     } catch (error) {
         console.error('Error loading vehicles:', error);
@@ -1940,15 +1986,39 @@ function createLayerControls(availableFeeds, loadedCounts) {
         </div>`;
     }
 
-    // Vehicles
+    // Vehicles - now with type filtering
     if (availableFeeds.includes('vehicle_status')) {
+        const vehicleCounts = loadedCounts.vehicles || {};
+        const totalVehicles = vehicleCounts.total || 0;
+        const typeBreakdown = vehicleCounts.byType || {};
+
         html += `<div class="layer-item">
             <label>
                 <input type="checkbox" id="vehiclesToggle" checked>
-                <span>Vehicles</span>
+                <span>All Vehicles</span>
             </label>
-            <span class="layer-count">${loadedCounts.vehicles || 0}</span>
+            <span class="layer-count">${totalVehicles}</span>
         </div>`;
+
+        // Add individual vehicle type controls if there are multiple types
+        if (Object.keys(typeBreakdown).length > 1) {
+            html += `<div class="vehicle-types-section" style="margin-left: 20px; border-left: 2px solid #e0e0e0; padding-left: 10px;">`;
+
+            Object.entries(typeBreakdown).forEach(([vehicleTypeId, count]) => {
+                const vehicleTypeName = getVehicleTypeName(vehicleTypeId);
+                const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_'); // Clean ID for DOM
+
+                html += `<div class="layer-item">
+                    <label>
+                        <input type="checkbox" id="vehicleType_${cleanId}" checked>
+                        <span>${vehicleTypeName}</span>
+                    </label>
+                    <span class="layer-count">${count}</span>
+                </div>`;
+            });
+
+            html += `</div>`;
+        }
     }
 
     controlsDiv.innerHTML = html;
@@ -1981,11 +2051,69 @@ function createLayerControls(availableFeeds, loadedCounts) {
         vehiclesToggle.addEventListener('change', (e) => {
             if (e.target.checked) {
                 map.addLayer(layers.vehicles);
+                // Also show all vehicle type layers
+                Object.values(layers.vehicleTypes).forEach(layer => {
+                    map.addLayer(layer);
+                });
+                // Check all vehicle type checkboxes
+                Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+                    const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
+                    const checkbox = document.getElementById(`vehicleType_${cleanId}`);
+                    if (checkbox) checkbox.checked = true;
+                });
             } else {
                 map.removeLayer(layers.vehicles);
+                // Also hide all vehicle type layers
+                Object.values(layers.vehicleTypes).forEach(layer => {
+                    map.removeLayer(layer);
+                });
+                // Uncheck all vehicle type checkboxes
+                Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+                    const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
+                    const checkbox = document.getElementById(`vehicleType_${cleanId}`);
+                    if (checkbox) checkbox.checked = false;
+                });
             }
+            // Update URL when layer visibility changes
+            const gbfsUrl = document.getElementById('gbfsUrlInput')?.value;
+            updateUrlParameters(gbfsUrl);
         });
     }
+
+    // Add event listeners for individual vehicle type toggles
+    Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+        const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
+        const typeToggle = document.getElementById(`vehicleType_${cleanId}`);
+        if (typeToggle) {
+            typeToggle.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    map.addLayer(layers.vehicleTypes[vehicleTypeId]);
+                } else {
+                    map.removeLayer(layers.vehicleTypes[vehicleTypeId]);
+                }
+
+                // Update the main vehicles toggle based on whether any types are selected
+                const anyTypeChecked = Object.keys(layers.vehicleTypes).some(id => {
+                    const cleanTypeId = id.replace(/[^a-zA-Z0-9]/g, '_');
+                    const checkbox = document.getElementById(`vehicleType_${cleanTypeId}`);
+                    return checkbox && checkbox.checked;
+                });
+
+                if (vehiclesToggle) {
+                    vehiclesToggle.checked = anyTypeChecked;
+                    if (anyTypeChecked) {
+                        map.addLayer(layers.vehicles);
+                    } else {
+                        map.removeLayer(layers.vehicles);
+                    }
+                }
+
+                // Update URL when layer visibility changes
+                const gbfsUrl = document.getElementById('gbfsUrlInput')?.value;
+                updateUrlParameters(gbfsUrl);
+            });
+        }
+    });
 }
 
 // Main function to load GBFS system
@@ -1998,12 +2126,22 @@ async function loadGBFSSystem(data, sourcePath = '') {
 
     try {
         // Clear all layers and reset their visibility
-        Object.values(layers).forEach(layer => {
-            layer.clearLayers();
-            if (map.hasLayer(layer)) {
-                map.removeLayer(layer);
+        Object.entries(layers).forEach(([key, layer]) => {
+            if (key === 'vehicleTypes') {
+                // Handle vehicle types separately
+                Object.values(layer).forEach(typeLayer => {
+                    typeLayer.clearLayers();
+                    if (map.hasLayer(typeLayer)) {
+                        map.removeLayer(typeLayer);
+                    }
+                });
+            } else {
+                layer.clearLayers();
+                if (map.hasLayer(layer)) {
+                    map.removeLayer(layer);
+                }
+                map.addLayer(layer); // Re-add all layers as visible
             }
-            map.addLayer(layer); // Re-add all layers as visible
         });
 
         // Clear all data arrays
