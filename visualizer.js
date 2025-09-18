@@ -102,7 +102,11 @@ function refreshVirtualStationDisplay() {
                     icon: createStationIcon(status, true)
                 });
             } else {
-                const style = getVirtualStationStyle(status, currentZoom);
+                // Detect bad data for refresh styling
+                const stationName = stationItem.station.name?.[0]?.text || stationItem.station.station_id;
+                const isBadData = detectBadStationAreaData(stationItem.station, status, stationName);
+
+                const style = getVirtualStationStyle(status, currentZoom, isBadData.isSuspicious);
                 newMapElement = L.polygon(stationItem._cachedData.latLngs, style);
 
                 // Add hover effects
@@ -343,6 +347,81 @@ let stationData = [];
 let vehicleData = [];
 let vehicleTypesData = [];
 let pricingPlansData = [];
+
+// Detect suspicious station area data that might be incorrectly categorized
+function detectBadStationAreaData(station, stationStatus, stationName) {
+    const suspiciousIndicators = [];
+
+    // Check for "No Parking Zone" indicators in name
+    if (stationName && (
+        stationName.toLowerCase().includes('npz') ||
+        stationName.toLowerCase().includes('no parking') ||
+        stationName.toLowerCase().includes('no-parking') ||
+        stationName.toLowerCase().includes('forbidden') ||
+        stationName.toLowerCase().includes('restricted')
+    )) {
+        suspiciousIndicators.push('Name suggests no-parking zone');
+    }
+
+    // Check for zero availability across all metrics
+    if (stationStatus) {
+        const hasZeroVehicles = stationStatus.num_vehicles_available === 0;
+        const hasZeroDocks = stationStatus.num_docks_available === 0;
+        const hasZeroCapacity = station.capacity === 0;
+
+        if (hasZeroVehicles && hasZeroDocks && station.is_virtual_station) {
+            suspiciousIndicators.push('Virtual station with zero vehicles and docks');
+        }
+
+        if (hasZeroCapacity) {
+            suspiciousIndicators.push('Station capacity set to zero');
+        }
+
+        // Check for vehicle types with all zero availability
+        if (stationStatus.vehicle_types_available && stationStatus.vehicle_types_available.length > 0) {
+            const allTypesZero = stationStatus.vehicle_types_available.every(vt => vt.count === 0);
+            if (allTypesZero) {
+                suspiciousIndicators.push('All vehicle types have zero availability');
+            }
+        }
+    }
+
+    // Check for potential geofencing zone duplicates
+    const potentialDuplicate = checkForGeofencingDuplicate(station);
+    if (potentialDuplicate) {
+        suspiciousIndicators.push(`Potential duplicate of geofencing zone: ${potentialDuplicate}`);
+    }
+
+    return {
+        isSuspicious: suspiciousIndicators.length > 0,
+        indicators: suspiciousIndicators
+    };
+}
+
+// Check if a station area might be a duplicate of a geofencing zone
+function checkForGeofencingDuplicate(station) {
+    if (!allZones || allZones.length === 0 || !station.station_area) {
+        return null;
+    }
+
+    const stationName = station.name?.[0]?.text || station.station_id;
+
+    // Look for geofencing zones with similar names
+    for (const zone of allZones) {
+        const zoneName = zone.feature.properties.name?.[0]?.text || '';
+
+        // Check for name similarity (case insensitive)
+        if (stationName && zoneName &&
+            (stationName.toLowerCase().includes(zoneName.toLowerCase()) ||
+             zoneName.toLowerCase().includes(stationName.toLowerCase()) ||
+             // Both contain NPZ or similar
+             (stationName.toLowerCase().includes('npz') && zoneName.toLowerCase().includes('npz')))) {
+            return zoneName;
+        }
+    }
+
+    return null;
+}
 
 // Check if station areas overlap with a point (affecting geofencing precedence)
 function getOverlappingStationAreas(clickPoint) {
@@ -631,27 +710,50 @@ function createZonePopupContent(features, clickPoint = null) {
             // Show station-specific rules that apply based on availability
             const stationStatus = stationData.find(s => s.station.station_id === station.station_id)?.status;
 
+            // Detect suspicious station areas that might be bad data
+            const isLikelyBadData = detectBadStationAreaData(station, stationStatus, stationName);
+
             // Determine actual rule applicability based on availability
             const hasVehicles = stationStatus && stationStatus.num_vehicles_available > 0;
             const hasDockingCapacity = stationStatus && (
                 stationStatus.num_docks_available > 0 ||
-                station.is_virtual_station // Virtual stations typically allow ending rides
+                (station.is_virtual_station && !isLikelyBadData) // Virtual stations typically allow ending rides, unless it's bad data
             );
+
+            // Show data quality warning for suspicious station areas
+            if (isLikelyBadData.isSuspicious) {
+                html += `<div style="background: #f8d7da; border: 1px solid #dc3545; border-radius: 4px; padding: 8px; margin: 6px 0; font-size: 11px;">`;
+                html += `<div style="font-weight: bold; color: #721c24; margin-bottom: 4px;">⚠️ Suspicious Station Area Data</div>`;
+                html += `<div style="color: #721c24;">`;
+                html += `This station area may be incorrectly categorized data:<br>`;
+                isLikelyBadData.indicators.forEach(indicator => {
+                    html += `• ${indicator}<br>`;
+                });
+                html += `Consider this may actually be a geofencing zone, not a station area.`;
+                html += `</div>`;
+                html += `</div>`;
+            }
 
             html += `<div style="font-size: 11px; color: #155724; margin-top: 6px; padding: 4px 6px; background: rgba(40, 167, 69, 0.1); border-radius: 3px;">`;
 
             // Ride start rules
-            if (hasVehicles) {
+            if (isLikelyBadData.isSuspicious) {
+                html += `<strong>✗ Ride Start:</strong> <span style="color: #dc3545;">Not allowed</span> (suspicious data - likely not a real station)<br>`;
+                html += `<strong>✗ Ride End:</strong> <span style="color: #dc3545;">Not allowed</span> (suspicious data - likely not a real station)`;
+            } else if (hasVehicles) {
                 html += `<strong>✓ Ride Start:</strong> <span style="color: #28a745;">Allowed</span> (station area + vehicles available)<br>`;
+                if (hasDockingCapacity) {
+                    html += `<strong>✓ Ride End:</strong> <span style="color: #28a745;">Allowed</span> (station area + capacity available)`;
+                } else {
+                    html += `<strong>✗ Ride End:</strong> <span style="color: #dc3545;">Not allowed</span> (no docking capacity)`;
+                }
             } else {
                 html += `<strong>✗ Ride Start:</strong> <span style="color: #dc3545;">Not allowed</span> (no vehicles available)<br>`;
-            }
-
-            // Ride end rules
-            if (hasDockingCapacity) {
-                html += `<strong>✓ Ride End:</strong> <span style="color: #28a745;">Allowed</span> (station area + capacity available)`;
-            } else {
-                html += `<strong>✗ Ride End:</strong> <span style="color: #dc3545;">Not allowed</span> (no docking capacity)`;
+                if (hasDockingCapacity) {
+                    html += `<strong>✓ Ride End:</strong> <span style="color: #28a745;">Allowed</span> (station area + capacity available)`;
+                } else {
+                    html += `<strong>✗ Ride End:</strong> <span style="color: #dc3545;">Not allowed</span> (no docking capacity)`;
+                }
             }
 
             html += `</div>`;
@@ -1007,19 +1109,38 @@ function calculatePolygonCentroid(coordinates) {
 }
 
 // Get virtual station styling based on availability and zoom level
-function getVirtualStationStyle(status, currentZoom = map.getZoom()) {
+function getVirtualStationStyle(status, currentZoom = map.getZoom(), isSuspiciousData = false) {
     const available = status ? status.num_vehicles_available || 0 : 0;
-    const baseColor = available > 0 ? '#4CAF50' : '#FF9800';
+
+    // Use distinct styling for suspicious data
+    let baseColor;
+    if (isSuspiciousData) {
+        baseColor = '#DC3545'; // Red for suspicious data
+    } else {
+        baseColor = available > 0 ? '#4CAF50' : '#FF9800';
+    }
 
     // Make styling more prominent at lower zoom levels
     const isLowZoom = currentZoom < 16;
     const weight = isLowZoom ? 4 : 3;
     const fillOpacity = isLowZoom ? 0.8 : 0.6;
-    const dashArray = isLowZoom ? '10, 6' : '8, 4';
+
+    // Use different dash pattern for suspicious data
+    const dashArray = isSuspiciousData
+        ? (isLowZoom ? '5, 5' : '3, 3')  // Tighter dashes for suspicious data
+        : (isLowZoom ? '10, 6' : '8, 4'); // Normal dashes
+
+    // Set fill color based on data quality and availability
+    let fillColor;
+    if (isSuspiciousData) {
+        fillColor = 'rgba(220, 53, 69, 0.4)'; // Red fill for suspicious data
+    } else {
+        fillColor = available > 0 ? 'rgba(76, 175, 80, 0.4)' : 'rgba(255, 152, 0, 0.4)';
+    }
 
     return {
         color: baseColor,
-        fillColor: available > 0 ? 'rgba(76, 175, 80, 0.4)' : 'rgba(255, 152, 0, 0.4)',
+        fillColor: fillColor,
         fillOpacity: fillOpacity,
         weight: weight,
         dashArray: dashArray,
@@ -1153,8 +1274,12 @@ function loadStations(stationInfo, stationStatus) {
                     )
                 );
 
-                // Get styling based on vehicle availability
-                const style = getVirtualStationStyle(status);
+                // Detect bad data before styling
+                const stationName = station.name?.[0]?.text || station.station_id;
+                const isBadData = detectBadStationAreaData(station, status, stationName);
+
+                // Get styling based on vehicle availability and data quality
+                const style = getVirtualStationStyle(status, undefined, isBadData.isSuspicious);
 
                 // At low zoom levels, show centroid with vehicle count
                 if (currentZoom < 14) {
