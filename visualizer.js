@@ -677,6 +677,22 @@ function analyzeVehicleTypePrecedence(features) {
     return vehicleTypeRules;
 }
 
+// Get available vehicle types from current vehicle data
+function getAvailableVehicleTypes() {
+    const availableTypes = new Set();
+
+    if (window.vehicleMarkersbyType) {
+        // Use the markers by type data which tracks all loaded vehicles
+        Object.keys(window.vehicleMarkersbyType).forEach(vehicleTypeId => {
+            if (window.vehicleMarkersbyType[vehicleTypeId].length > 0) {
+                availableTypes.add(vehicleTypeId);
+            }
+        });
+    }
+
+    return availableTypes;
+}
+
 // Create popup content for overlapping zones with vehicle type precedence
 function createZonePopupContent(features, clickPoint = null) {
     let html = `<div class="popup-content">`;
@@ -869,7 +885,23 @@ function createZonePopupContent(features, clickPoint = null) {
 
         // Analyze vehicle type precedence
         const vehicleTypePrecedence = analyzeVehicleTypePrecedence(features);
-        const hasVehicleSpecificRules = Array.from(vehicleTypePrecedence.keys()).some(key => key !== '*');
+
+        // Filter to only show vehicle types that have available vehicles
+        const availableVehicleTypes = getAvailableVehicleTypes();
+        const filteredVehicleTypePrecedence = new Map();
+
+        vehicleTypePrecedence.forEach((rules, vehicleType) => {
+            // Always show universal rules (*)
+            if (vehicleType === '*') {
+                filteredVehicleTypePrecedence.set(vehicleType, rules);
+            }
+            // Only show vehicle-specific rules if that vehicle type is available
+            else if (availableVehicleTypes.has(vehicleType)) {
+                filteredVehicleTypePrecedence.set(vehicleType, rules);
+            }
+        });
+
+        const hasVehicleSpecificRules = Array.from(filteredVehicleTypePrecedence.keys()).some(key => key !== '*');
 
         if (hasVehicleSpecificRules) {
             // Show vehicle type specific precedence analysis
@@ -880,7 +912,7 @@ function createZonePopupContent(features, clickPoint = null) {
 
             // Create tabs or sections for each vehicle type
             html += `<div style="margin-bottom: 15px;">`;
-            vehicleTypePrecedence.forEach((rules, vehicleType) => {
+            filteredVehicleTypePrecedence.forEach((rules, vehicleType) => {
                 const highestPrecedenceRule = rules[0];
                 const vehicleTypeLabel = vehicleType === '*' ? 'All Vehicle Types' : `Vehicle Type: ${getVehicleTypeName(vehicleType)}`;
 
