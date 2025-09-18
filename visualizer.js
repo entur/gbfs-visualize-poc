@@ -120,7 +120,45 @@ function refreshVirtualStationDisplay() {
                 });
             }
 
-            newMapElement.bindPopup(stationItem._cachedData.popupContent);
+            // For station area polygons, use unified popup that shows both station and zone info
+            if (newMapElement instanceof L.Polygon) {
+                newMapElement.on('click', function(e) {
+                    const clickPoint = e.latlng;
+
+                    // Find overlapping zones at this point
+                    const overlappingZones = [];
+                    allZones.forEach(zone => {
+                        zone.latLngs.forEach(polygonCoords => {
+                            const testPoly = L.polygon(polygonCoords);
+                            if (testPoly.getBounds().contains(clickPoint)) {
+                                const polyPoints = polygonCoords[0].map(coord => L.latLng(coord));
+                                if (isPointInPolygon(clickPoint, polyPoints)) {
+                                    overlappingZones.push(zone.feature);
+                                }
+                            }
+                        });
+                    });
+
+                    // Remove duplicates
+                    const uniqueZones = overlappingZones.filter((zone, index, self) =>
+                        index === self.findIndex(z => z === zone)
+                    );
+
+                    // Create unified popup
+                    const popup = L.popup({
+                        maxWidth: 400,
+                        maxHeight: 500
+                    })
+                    .setLatLng(clickPoint)
+                    .setContent(createZonePopupContent(uniqueZones, clickPoint))
+                    .openOn(map);
+
+                    L.DomEvent.stopPropagation(e);
+                });
+            } else {
+                // For station markers (not polygons), keep the original popup
+                newMapElement.bindPopup(stationItem._cachedData.popupContent);
+            }
             newMapElement.addTo(layers.stations);
 
             // Update the stored reference
@@ -306,6 +344,73 @@ let vehicleData = [];
 let vehicleTypesData = [];
 let pricingPlansData = [];
 
+// Check if station areas overlap with a point (affecting geofencing precedence)
+function getOverlappingStationAreas(clickPoint) {
+    const overlappingStations = [];
+
+    if (!stationData || stationData.length === 0) {
+        return overlappingStations;
+    }
+
+    stationData.forEach(stationItem => {
+        const station = stationItem.station;
+
+        // Check virtual stations with areas
+        if (station.is_virtual_station && station.station_area) {
+            try {
+                const latLngs = station.station_area.coordinates.map(polygon =>
+                    polygon.map(ring =>
+                        ring.map(coord => [coord[1], coord[0]]) // Swap lng/lat to lat/lng
+                    )
+                );
+
+                // Check each polygon in the multipolygon
+                latLngs.forEach(polygonCoords => {
+                    polygonCoords.forEach(ring => {
+                        const polyPoints = ring.map(coord => L.latLng(coord));
+                        if (isPointInPolygon(clickPoint, polyPoints)) {
+                            overlappingStations.push({
+                                station: station,
+                                type: 'virtual'
+                            });
+                        }
+                    });
+                });
+            } catch (error) {
+                console.warn('Error checking virtual station area overlap:', error);
+            }
+        }
+
+        // Check physical stations with unusual polygon areas
+        else if (!station.is_virtual_station && station.station_area) {
+            try {
+                const latLngs = station.station_area.coordinates.map(polygon =>
+                    polygon.map(ring =>
+                        ring.map(coord => [coord[1], coord[0]]) // Swap lng/lat to lat/lng
+                    )
+                );
+
+                // Check each polygon in the multipolygon
+                latLngs.forEach(polygonCoords => {
+                    polygonCoords.forEach(ring => {
+                        const polyPoints = ring.map(coord => L.latLng(coord));
+                        if (isPointInPolygon(clickPoint, polyPoints)) {
+                            overlappingStations.push({
+                                station: station,
+                                type: 'physical-with-area'
+                            });
+                        }
+                    });
+                });
+            } catch (error) {
+                console.warn('Error checking physical station area overlap:', error);
+            }
+        }
+    });
+
+    return overlappingStations;
+}
+
 // Helper function to check if a point is inside a polygon
 function isPointInPolygon(point, polygon) {
     const x = point.lat, y = point.lng;
@@ -356,7 +461,7 @@ function getZoneColor(rules) {
 }
 
 // Create zone info HTML
-function createZoneInfo(feature) {
+function createZoneInfo(feature, overlappingStations = []) {
     const props = feature.properties;
     let name = 'Unnamed Zone';
 
@@ -382,9 +487,35 @@ function createZoneInfo(feature) {
                 html += `<div><span class="rule-label">Vehicle Types:</span> <span class="rule-value">${rule.vehicle_type_ids.join(', ')}</span></div>`;
             }
 
-            html += `<div><span class="rule-label">Ride Start:</span> <span class="rule-value ${rule.ride_start_allowed ? 'allowed' : 'forbidden'}">${rule.ride_start_allowed ? '✓ Allowed' : '✗ Forbidden'}</span></div>`;
-            html += `<div><span class="rule-label">Ride End:</span> <span class="rule-value ${rule.ride_end_allowed ? 'allowed' : 'forbidden'}">${rule.ride_end_allowed ? '✓ Allowed' : '✗ Forbidden'}</span></div>`;
-            html += `<div><span class="rule-label">Ride Through:</span> <span class="rule-value ${rule.ride_through_allowed ? 'allowed' : 'forbidden'}">${rule.ride_through_allowed ? '✓ Allowed' : '✗ Forbidden'}</span></div>`;
+            // Check if start/end rules are actually overridden by available station capacity
+            let startOverridden = false;
+            let endOverridden = false;
+
+            if (overlappingStations.length > 0) {
+                // Check if any overlapping station can actually override start rules (has vehicles)
+                startOverridden = overlappingStations.some(stationInfo => {
+                    const stationStatus = stationData.find(s => s.station.station_id === stationInfo.station.station_id)?.status;
+                    return stationStatus && stationStatus.num_vehicles_available > 0;
+                });
+
+                // Check if any overlapping station can actually override end rules (has capacity)
+                endOverridden = overlappingStations.some(stationInfo => {
+                    const stationStatus = stationData.find(s => s.station.station_id === stationInfo.station.station_id)?.status;
+                    return stationStatus && (
+                        stationStatus.num_docks_available > 0 ||
+                        stationInfo.station.is_virtual_station
+                    );
+                });
+            }
+
+            // Style start/end rules based on actual availability override
+            const startStyle = startOverridden ? 'color: #6c757d; text-decoration: line-through;' : '';
+            const endStyle = endOverridden ? 'color: #6c757d; text-decoration: line-through;' : '';
+            const throughStyle = ''; // Through rules are not overridden by station areas
+
+            html += `<div><span class="rule-label">Ride Start:</span> <span class="rule-value ${rule.ride_start_allowed ? 'allowed' : 'forbidden'}" style="${startStyle}">${rule.ride_start_allowed ? '✓ Allowed' : '✗ Forbidden'}${startOverridden ? ' (overridden by station)' : ''}</span></div>`;
+            html += `<div><span class="rule-label">Ride End:</span> <span class="rule-value ${rule.ride_end_allowed ? 'allowed' : 'forbidden'}" style="${endStyle}">${rule.ride_end_allowed ? '✓ Allowed' : '✗ Forbidden'}${endOverridden ? ' (overridden by station)' : ''}</span></div>`;
+            html += `<div><span class="rule-label">Ride Through:</span> <span class="rule-value ${rule.ride_through_allowed ? 'allowed' : 'forbidden'}" style="${throughStyle}">${rule.ride_through_allowed ? '✓ Allowed' : '✗ Forbidden'}</span></div>`;
 
             if (rule.station_parking !== undefined) {
                 html += `<div><span class="rule-label">Station Parking:</span> <span class="rule-value ${rule.station_parking ? 'allowed' : ''}">${rule.station_parking ? '✓ Required' : '✗ Not Required'}</span></div>`;
@@ -462,15 +593,110 @@ function analyzeVehicleTypePrecedence(features) {
 }
 
 // Create popup content for overlapping zones with vehicle type precedence
-function createZonePopupContent(features) {
+function createZonePopupContent(features, clickPoint = null) {
     let html = `<div class="popup-content">`;
 
     // Check if we should show global rules
     const hasGlobalRules = globalRules && globalRules.length > 0;
 
+    // Check for station area overlaps if we have a click point
+    let overlappingStations = [];
+    if (clickPoint) {
+        overlappingStations = getOverlappingStationAreas(clickPoint);
+    }
+
+    // Show station area information FIRST if applicable
+    if (overlappingStations.length > 0) {
+        html += `<h4 style="color: #28a745;">🏪 Active Station Area Rules</h4>`;
+
+        overlappingStations.forEach((stationInfo, index) => {
+            const station = stationInfo.station;
+            const stationName = station.name?.[0]?.text || station.station_id;
+
+            html += `<div style="background: #d4edda; border: 1px solid #28a745; border-radius: 4px; padding: 10px; margin-bottom: 10px;">`;
+            html += `<div style="font-weight: bold; color: #155724; margin-bottom: 6px;">`;
+            html += `📍 ${stationName}`;
+            html += `</div>`;
+
+            html += `<div style="font-size: 11px; color: #155724; margin-bottom: 4px;">`;
+            html += `<strong>Type:</strong> ${stationInfo.type === 'virtual' ? 'Virtual Station Area' : 'Physical Station with Area'}`;
+            html += `</div>`;
+
+            if (station.station_id) {
+                html += `<div style="font-size: 11px; color: #155724; margin-bottom: 4px;">`;
+                html += `<strong>Station ID:</strong> ${station.station_id}`;
+                html += `</div>`;
+            }
+
+            // Show station-specific rules that apply based on availability
+            const stationStatus = stationData.find(s => s.station.station_id === station.station_id)?.status;
+
+            // Determine actual rule applicability based on availability
+            const hasVehicles = stationStatus && stationStatus.num_vehicles_available > 0;
+            const hasDockingCapacity = stationStatus && (
+                stationStatus.num_docks_available > 0 ||
+                station.is_virtual_station // Virtual stations typically allow ending rides
+            );
+
+            html += `<div style="font-size: 11px; color: #155724; margin-top: 6px; padding: 4px 6px; background: rgba(40, 167, 69, 0.1); border-radius: 3px;">`;
+
+            // Ride start rules
+            if (hasVehicles) {
+                html += `<strong>✓ Ride Start:</strong> <span style="color: #28a745;">Allowed</span> (station area + vehicles available)<br>`;
+            } else {
+                html += `<strong>✗ Ride Start:</strong> <span style="color: #dc3545;">Not allowed</span> (no vehicles available)<br>`;
+            }
+
+            // Ride end rules
+            if (hasDockingCapacity) {
+                html += `<strong>✓ Ride End:</strong> <span style="color: #28a745;">Allowed</span> (station area + capacity available)`;
+            } else {
+                html += `<strong>✗ Ride End:</strong> <span style="color: #dc3545;">Not allowed</span> (no docking capacity)`;
+            }
+
+            html += `</div>`;
+
+            // Add availability details
+            if (stationStatus) {
+                html += `<div style="font-size: 10px; color: #6c757d; margin-top: 4px; font-style: italic;">`;
+                if (stationStatus.num_vehicles_available !== undefined) {
+                    html += `Vehicles: ${stationStatus.num_vehicles_available} available`;
+                }
+                if (stationStatus.num_docks_available !== undefined) {
+                    html += `${stationStatus.num_vehicles_available !== undefined ? ' | ' : ''}Docks: ${stationStatus.num_docks_available} available`;
+                }
+                html += `</div>`;
+            }
+
+            html += `</div>`;
+        });
+
+        // Show precedence explanation with availability considerations
+        html += `<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 8px; margin-bottom: 15px; font-size: 12px;">`;
+        html += `<div style="font-weight: bold; color: #856404; margin-bottom: 4px;">⚠️ Station Area Precedence Rules</div>`;
+        html += `<div style="color: #856404;">`;
+        html += `Station areas override geofencing zone start/end rules <strong>only when vehicles/capacity are available</strong>:<br>`;
+        html += `• <strong>Ride Start:</strong> Station area allows starting IF vehicles are available<br>`;
+        html += `• <strong>Ride End:</strong> Station area allows ending IF docking capacity exists<br>`;
+        html += `• <strong>Other rules:</strong> Zone rules for ride-through, speed limits, and parking still apply`;
+        html += `</div>`;
+        html += `</div>`;
+
+        // Add separator if there are also zones
+        if (features.length > 0 || hasGlobalRules) {
+            html += `<div style="border-top: 2px solid #dee2e6; margin: 15px 0; padding-top: 15px;">`;
+            html += `<h5 style="color: #6c757d; font-size: 13px; margin: 0 0 10px 0;">📍 Underlying Geofencing Zones:</h5>`;
+            html += `<div style="font-size: 11px; color: #6c757d; margin-bottom: 10px; font-style: italic;">`;
+            html += `(Start/end rules overridden by station area above, but other rules may still apply)`;
+            html += `</div>`;
+        }
+    }
+
     if (features.length === 0 && hasGlobalRules) {
         // Show only global rules
-        html += `<h4>🌍 Global Rules Apply Here</h4>`;
+        if (overlappingStations.length === 0) {
+            html += `<h4>🌍 Global Rules Apply Here</h4>`;
+        }
         html += `<div style="background: #e8f5e8; border: 1px solid #4CAF50; border-radius: 4px; padding: 8px; margin-bottom: 10px; font-size: 12px;">`;
         html += `<strong>Global rules apply everywhere in the system.</strong>`;
         html += `</div>`;
@@ -478,17 +704,58 @@ function createZonePopupContent(features) {
         globalRules.forEach((rule, index) => {
             html += `<div style="background: #f8f9fa; border-left: 4px solid #28a745; padding: 8px; margin-bottom: 8px; border-radius: 0 4px 4px 0;">`;
             html += `<div style="font-weight: bold; color: #28a745; font-size: 12px; margin-bottom: 4px;">Global Rule ${index + 1}</div>`;
-            html += createRuleDetails(rule);
+            // Create rule details inline
+            if (rule.vehicle_type_ids && rule.vehicle_type_ids.length > 0) {
+                html += `<div style="font-size: 11px; margin-bottom: 4px;"><strong>Vehicle Types:</strong> ${rule.vehicle_type_ids.join(', ')}</div>`;
+            }
+
+            // Check if start/end rules are actually overridden by available station capacity
+            let startOverridden = false;
+            let endOverridden = false;
+
+            if (overlappingStations.length > 0) {
+                // Check if any overlapping station can actually override start rules (has vehicles)
+                startOverridden = overlappingStations.some(stationInfo => {
+                    const stationStatus = stationData.find(s => s.station.station_id === stationInfo.station.station_id)?.status;
+                    return stationStatus && stationStatus.num_vehicles_available > 0;
+                });
+
+                // Check if any overlapping station can actually override end rules (has capacity)
+                endOverridden = overlappingStations.some(stationInfo => {
+                    const stationStatus = stationData.find(s => s.station.station_id === stationInfo.station.station_id)?.status;
+                    return stationStatus && (
+                        stationStatus.num_docks_available > 0 ||
+                        stationInfo.station.is_virtual_station
+                    );
+                });
+            }
+
+            // Style start/end rules based on actual availability override
+            const startStyle = startOverridden ? 'color: #6c757d; text-decoration: line-through;' : '';
+            const endStyle = endOverridden ? 'color: #6c757d; text-decoration: line-through;' : '';
+
+            html += `<div style="font-size: 11px; margin-bottom: 2px;">`;
+            html += `<span style="${startStyle}">Start: ${rule.ride_start_allowed ? '✓ Allowed' : '✗ Forbidden'}${startOverridden ? ' (overridden by station)' : ''}</span> | `;
+            html += `<span style="${endStyle}">End: ${rule.ride_end_allowed ? '✓ Allowed' : '✗ Forbidden'}${endOverridden ? ' (overridden by station)' : ''}</span> | `;
+            html += `<span>Through: ${rule.ride_through_allowed ? '✓ Allowed' : '✗ Forbidden'}</span>`;
+            html += `</div>`;
+
+            if (rule.maximum_speed_kph !== undefined) {
+                html += `<div style="font-size: 11px; margin-bottom: 2px;"><strong>Max Speed:</strong> ${rule.maximum_speed_kph} km/h</div>`;
+            }
+            if (rule.station_parking) {
+                html += `<div style="font-size: 11px; margin-bottom: 2px;"><strong>Station Parking:</strong> Required</div>`;
+            }
             html += `</div>`;
         });
-    } else if (features.length === 1 && !hasGlobalRules) {
-        // Single zone, no global rules - use simple display
-        html += createZoneInfo(features[0]);
+    } else if (features.length === 1 && !hasGlobalRules && overlappingStations.length === 0) {
+        // Single zone, no global rules, no station areas - use simple display
+        html += createZoneInfo(features[0], overlappingStations);
     } else {
         // Multiple zones OR single zone with global rules - use precedence analysis
         if (features.length > 1) {
             html += `<h4 style="color: #ff6b6b;">⚠ ${features.length} Overlapping Zones</h4>`;
-        } else {
+        } else if (overlappingStations.length === 0) {
             html += `<h4>${features[0].properties.name?.[0]?.text || 'Zone'} + Global Rules</h4>`;
         }
 
@@ -558,13 +825,33 @@ function createZonePopupContent(features) {
 
             html += `<div style="padding: 5px 0;">`;
             html += `<div style="font-size: 11px; color: #666; font-weight: bold; margin-bottom: 5px;">`;
-            html += `Zone #${index + 1} (${hasVehicleSpecificRules ? 'See analysis above for precedence' : index === 0 ? 'Highest Precedence' : 'Lower Precedence'})`;
+
+            // Update precedence label based on station area override
+            let precedenceLabel = '';
+            if (overlappingStations.length > 0) {
+                precedenceLabel = 'Start/end overridden by station area';
+            } else if (hasVehicleSpecificRules) {
+                precedenceLabel = 'See analysis above for precedence';
+            } else if (index === 0) {
+                precedenceLabel = 'Highest Precedence';
+            } else {
+                precedenceLabel = 'Lower Precedence';
+            }
+
+            html += `Zone #${index + 1} (${precedenceLabel})`;
             html += `</div>`;
-            html += createZoneInfo(feature);
+
+            // Pass the station overlap info to createZoneInfo so it can style overridden rules
+            html += createZoneInfo(feature, overlappingStations);
             html += `</div>`;
         });
         html += `</div>`;
         html += `</div>`;
+    }
+
+    // Close the separator div if station areas were shown
+    if (overlappingStations.length > 0 && (features.length > 0 || hasGlobalRules)) {
+        html += `</div>`; // Close the separator div started after station areas
     }
 
     html += `</div>`;
@@ -657,7 +944,7 @@ function loadGeofencingZones(data) {
                             maxHeight: 500
                         })
                             .setLatLng(clickPoint)
-                            .setContent(createZonePopupContent(uniqueZones))
+                            .setContent(createZonePopupContent(uniqueZones, clickPoint))
                             .openOn(map);
 
                         L.DomEvent.stopPropagation(e);
@@ -894,7 +1181,45 @@ function loadStations(stationInfo, stationStatus) {
                     });
                 }
 
-                mapElement.bindPopup(popupContent);
+                // For station area polygons, use unified popup that shows both station and zone info
+                if (mapElement instanceof L.Polygon) {
+                    mapElement.on('click', function(e) {
+                        const clickPoint = e.latlng;
+
+                        // Find overlapping zones at this point
+                        const overlappingZones = [];
+                        allZones.forEach(zone => {
+                            zone.latLngs.forEach(polygonCoords => {
+                                const testPoly = L.polygon(polygonCoords);
+                                if (testPoly.getBounds().contains(clickPoint)) {
+                                    const polyPoints = polygonCoords[0].map(coord => L.latLng(coord));
+                                    if (isPointInPolygon(clickPoint, polyPoints)) {
+                                        overlappingZones.push(zone.feature);
+                                    }
+                                }
+                            });
+                        });
+
+                        // Remove duplicates
+                        const uniqueZones = overlappingZones.filter((zone, index, self) =>
+                            index === self.findIndex(z => z === zone)
+                        );
+
+                        // Create unified popup
+                        const popup = L.popup({
+                            maxWidth: 400,
+                            maxHeight: 500
+                        })
+                        .setLatLng(clickPoint)
+                        .setContent(createZonePopupContent(uniqueZones, clickPoint))
+                        .openOn(map);
+
+                        L.DomEvent.stopPropagation(e);
+                    });
+                } else {
+                    // For station markers (not polygons), keep the original popup
+                    mapElement.bindPopup(popupContent);
+                }
                 mapElement.addTo(layers.stations);
 
             } else if (station.lat !== undefined && station.lon !== undefined) {
@@ -931,7 +1256,40 @@ function loadStations(stationInfo, stationStatus) {
                         dashArray: '5, 5'  // Dashed line to show it's unusual
                     });
 
-                    polygon.bindPopup(popupContent + '<div style="color: #ff8c00; font-size: 11px; margin-top: 8px;">⚠️ Polygon area for physical station (unusual)</div>');
+                    // For physical station polygon areas, use unified popup
+                    polygon.on('click', function(e) {
+                        const clickPoint = e.latlng;
+
+                        // Find overlapping zones at this point
+                        const overlappingZones = [];
+                        allZones.forEach(zone => {
+                            zone.latLngs.forEach(polygonCoords => {
+                                const testPoly = L.polygon(polygonCoords);
+                                if (testPoly.getBounds().contains(clickPoint)) {
+                                    const polyPoints = polygonCoords[0].map(coord => L.latLng(coord));
+                                    if (isPointInPolygon(clickPoint, polyPoints)) {
+                                        overlappingZones.push(zone.feature);
+                                    }
+                                }
+                            });
+                        });
+
+                        // Remove duplicates
+                        const uniqueZones = overlappingZones.filter((zone, index, self) =>
+                            index === self.findIndex(z => z === zone)
+                        );
+
+                        // Create unified popup
+                        const popup = L.popup({
+                            maxWidth: 400,
+                            maxHeight: 500
+                        })
+                        .setLatLng(clickPoint)
+                        .setContent(createZonePopupContent(uniqueZones, clickPoint))
+                        .openOn(map);
+
+                        L.DomEvent.stopPropagation(e);
+                    });
                     stationGroup.addLayer(polygon);
 
                     stationGroup.addTo(layers.stations);
