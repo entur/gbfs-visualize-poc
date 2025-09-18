@@ -1487,15 +1487,13 @@ function loadVehicles(data) {
     layers.vehicles.clearLayers();
     vehicleData = [];
 
-    // Clear existing vehicle type layers
-    Object.values(layers.vehicleTypes).forEach(layer => {
-        layer.clearLayers();
-        map.removeLayer(layer);
-    });
+    // Clear existing vehicle type data (no longer using separate cluster groups)
     layers.vehicleTypes = {};
 
-    // Track vehicle counts by type
+    // Track vehicle counts by type and visible vehicle types
     const vehicleTypeCounts = {};
+    window.visibleVehicleTypes = new Set(); // Track which vehicle types are currently visible
+    window.vehicleMarkersbyType = {}; // Track markers by type for filtering
 
     try {
         if (!data || !data.data || !data.data.vehicles) {
@@ -1505,25 +1503,13 @@ function loadVehicles(data) {
 
         const vehicles = data.data.vehicles;
 
-        // First pass: group vehicles by type and create layer groups
+        // First pass: count vehicles by type
         vehicles.forEach(vehicle => {
             if (vehicle.lat !== undefined && vehicle.lon !== undefined) {
                 const vehicleTypeId = vehicle.vehicle_type_id || 'unknown';
-
-                if (!layers.vehicleTypes[vehicleTypeId]) {
-                    // Create new layer group for this vehicle type
-                    layers.vehicleTypes[vehicleTypeId] = L.markerClusterGroup({
-                        maxClusterRadius: 30,
-                        spiderfyOnMaxZoom: true,
-                        showCoverageOnHover: false,
-                        zoomToBoundsOnClick: true,
-                        disableClusteringAtZoom: 16
-                    });
-                    // Add to map by default (will be controlled by layer toggles)
-                    layers.vehicleTypes[vehicleTypeId].addTo(map);
-                    vehicleTypeCounts[vehicleTypeId] = 0;
-                }
-                vehicleTypeCounts[vehicleTypeId]++;
+                vehicleTypeCounts[vehicleTypeId] = (vehicleTypeCounts[vehicleTypeId] || 0) + 1;
+                // All vehicle types start as visible
+                window.visibleVehicleTypes.add(vehicleTypeId);
             }
         });
 
@@ -1601,13 +1587,18 @@ function loadVehicles(data) {
 
                 marker.bindPopup(popupContent);
 
-                // Add to both the general vehicles layer and the specific vehicle type layer
-                marker.addTo(layers.vehicles);
-
+                // Store vehicle type ID on the marker for filtering
                 const vehicleTypeId = vehicle.vehicle_type_id || 'unknown';
-                if (layers.vehicleTypes[vehicleTypeId]) {
-                    marker.addTo(layers.vehicleTypes[vehicleTypeId]);
+                marker.vehicleTypeId = vehicleTypeId;
+
+                // Track markers by vehicle type
+                if (!window.vehicleMarkersbyType[vehicleTypeId]) {
+                    window.vehicleMarkersbyType[vehicleTypeId] = [];
                 }
+                window.vehicleMarkersbyType[vehicleTypeId].push(marker);
+
+                // Add to unified vehicles cluster group only
+                marker.addTo(layers.vehicles);
 
                 vehicleData.push({
                     vehicle: vehicle,
@@ -1958,6 +1949,40 @@ function updateStats(counts) {
     statsDiv.innerHTML = html || '<p style="color: #999; font-size: 13px;">No statistics available</p>';
 }
 
+// Vehicle type filtering functions for unified clustering
+function showVehicleType(vehicleTypeId) {
+    if (!window.visibleVehicleTypes) window.visibleVehicleTypes = new Set();
+    window.visibleVehicleTypes.add(vehicleTypeId);
+
+    // Add all markers of this vehicle type back to the unified cluster
+    if (window.vehicleMarkersbyType && window.vehicleMarkersbyType[vehicleTypeId]) {
+        window.vehicleMarkersbyType[vehicleTypeId].forEach(marker => {
+            if (!layers.vehicles.hasLayer(marker)) {
+                layers.vehicles.addLayer(marker);
+            }
+        });
+    }
+}
+
+function hideVehicleType(vehicleTypeId) {
+    if (!window.visibleVehicleTypes) window.visibleVehicleTypes = new Set();
+    window.visibleVehicleTypes.delete(vehicleTypeId);
+
+    // Remove all markers of this vehicle type from the unified cluster
+    if (window.vehicleMarkersbyType && window.vehicleMarkersbyType[vehicleTypeId]) {
+        window.vehicleMarkersbyType[vehicleTypeId].forEach(marker => {
+            if (layers.vehicles.hasLayer(marker)) {
+                layers.vehicles.removeLayer(marker);
+            }
+        });
+    }
+}
+
+function isVehicleTypeVisible(vehicleTypeId) {
+    if (!window.visibleVehicleTypes) return true;
+    return window.visibleVehicleTypes.has(vehicleTypeId);
+}
+
 // Create layer controls
 function createLayerControls(availableFeeds, loadedCounts) {
     const controlsDiv = document.getElementById('layerControls');
@@ -2051,24 +2076,24 @@ function createLayerControls(availableFeeds, loadedCounts) {
         vehiclesToggle.addEventListener('change', (e) => {
             if (e.target.checked) {
                 map.addLayer(layers.vehicles);
-                // Also show all vehicle type layers
-                Object.values(layers.vehicleTypes).forEach(layer => {
-                    map.addLayer(layer);
-                });
+                // Show all vehicle types by making them visible
+                if (window.visibleVehicleTypes) {
+                    window.visibleVehicleTypes.forEach(vehicleTypeId => {
+                        showVehicleType(vehicleTypeId);
+                    });
+                }
                 // Check all vehicle type checkboxes
-                Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+                const vehicleTypeCounts = loadedCounts?.vehicles?.byType || {};
+                Object.keys(vehicleTypeCounts).forEach(vehicleTypeId => {
                     const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
                     const checkbox = document.getElementById(`vehicleType_${cleanId}`);
                     if (checkbox) checkbox.checked = true;
                 });
             } else {
                 map.removeLayer(layers.vehicles);
-                // Also hide all vehicle type layers
-                Object.values(layers.vehicleTypes).forEach(layer => {
-                    map.removeLayer(layer);
-                });
                 // Uncheck all vehicle type checkboxes
-                Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+                const vehicleTypeCounts = loadedCounts?.vehicles?.byType || {};
+                Object.keys(vehicleTypeCounts).forEach(vehicleTypeId => {
                     const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
                     const checkbox = document.getElementById(`vehicleType_${cleanId}`);
                     if (checkbox) checkbox.checked = false;
@@ -2081,19 +2106,20 @@ function createLayerControls(availableFeeds, loadedCounts) {
     }
 
     // Add event listeners for individual vehicle type toggles
-    Object.keys(layers.vehicleTypes).forEach(vehicleTypeId => {
+    const vehicleTypeCounts = loadedCounts?.vehicles?.byType || {};
+    Object.keys(vehicleTypeCounts).forEach(vehicleTypeId => {
         const cleanId = vehicleTypeId.replace(/[^a-zA-Z0-9]/g, '_');
         const typeToggle = document.getElementById(`vehicleType_${cleanId}`);
         if (typeToggle) {
             typeToggle.addEventListener('change', (e) => {
                 if (e.target.checked) {
-                    map.addLayer(layers.vehicleTypes[vehicleTypeId]);
+                    showVehicleType(vehicleTypeId);
                 } else {
-                    map.removeLayer(layers.vehicleTypes[vehicleTypeId]);
+                    hideVehicleType(vehicleTypeId);
                 }
 
                 // Update the main vehicles toggle based on whether any types are selected
-                const anyTypeChecked = Object.keys(layers.vehicleTypes).some(id => {
+                const anyTypeChecked = Object.keys(vehicleTypeCounts).some(id => {
                     const cleanTypeId = id.replace(/[^a-zA-Z0-9]/g, '_');
                     const checkbox = document.getElementById(`vehicleType_${cleanTypeId}`);
                     return checkbox && checkbox.checked;
