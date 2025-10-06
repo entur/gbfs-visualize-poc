@@ -261,6 +261,13 @@ function createVirtualStationPopup(station, status) {
         popupContent += `</div>`;
     }
 
+    // Add raw GBFS data section
+    const rawData = {
+        station_information: station,
+        station_status: status || null
+    };
+    popupContent += createRawDataSection(rawData);
+
     popupContent += `</div>`;
     return popupContent;
 }
@@ -1018,6 +1025,24 @@ function createZonePopupContent(features, clickPoint = null) {
         html += `</div>`; // Close the separator div started after station areas
     }
 
+    // Add raw GBFS data section
+    const rawData = {};
+    if (features.length > 0) {
+        rawData.geofencing_zones = features.map(f => f.properties);
+    }
+    if (overlappingStations.length > 0) {
+        rawData.station_areas = overlappingStations.map(s => ({
+            station_information: s.station,
+            type: s.type
+        }));
+    }
+    if (hasGlobalRules) {
+        rawData.global_rules = globalRules;
+    }
+    if (Object.keys(rawData).length > 0) {
+        html += createRawDataSection(rawData);
+    }
+
     html += `</div>`;
     return html;
 }
@@ -1329,6 +1354,13 @@ function loadStations(stationInfo, stationStatus) {
 
                 popupContent += `</div>`;
             }
+
+            // Add raw GBFS data section
+            const rawData = {
+                station_information: station,
+                station_status: status || null
+            };
+            popupContent += createRawDataSection(rawData);
 
             popupContent += `</div>`;
 
@@ -1647,6 +1679,9 @@ function loadVehicles(data) {
                     popupContent += `<div><strong>Range:</strong> ${(vehicle.current_range_meters / 1000).toFixed(1)} km</div>`;
                 }
 
+                // Add raw GBFS data section
+                popupContent += createRawDataSection({ vehicle_status: vehicle });
+
                 popupContent += `</div>`;
 
                 marker.bindPopup(popupContent);
@@ -1930,6 +1965,54 @@ function getVehicleTypeName(vehicleTypeId) {
             return `${typeDescription}${pricingInfo}`;
         }
     }
+}
+
+// Syntax highlight JSON
+function syntaxHighlightJSON(json) {
+    if (typeof json !== 'string') {
+        json = JSON.stringify(json, null, 2);
+    }
+    json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+        let cls = 'json-number';
+        if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+                cls = 'json-key';
+            } else {
+                cls = 'json-string';
+            }
+        } else if (/true|false/.test(match)) {
+            cls = 'json-boolean';
+        } else if (/null/.test(match)) {
+            cls = 'json-null';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+    });
+}
+
+// Create collapsible raw data section
+function createRawDataSection(data, label = 'Raw GBFS Data') {
+    const id = 'raw-' + Math.random().toString(36).substr(2, 9);
+    return `
+        <div style="margin-top: 12px; border-top: 1px solid #ddd; padding-top: 8px;">
+            <div style="cursor: pointer; user-select: none; font-weight: 500; font-size: 11px; color: #666;" onclick="
+                const content = document.getElementById('${id}');
+                const arrow = this.querySelector('.arrow');
+                if (content.style.display === 'none') {
+                    content.style.display = 'block';
+                    arrow.textContent = '▼';
+                } else {
+                    content.style.display = 'none';
+                    arrow.textContent = '▶';
+                }
+            ">
+                <span class="arrow">▶</span> ${label}
+            </div>
+            <div id="${id}" style="display: none; margin-top: 8px; max-height: 300px; overflow: auto; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 8px;">
+                <pre style="margin: 0; font-size: 10px; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word;">${syntaxHighlightJSON(data)}</pre>
+            </div>
+        </div>
+    `;
 }
 
 // Format vehicle types available as inline breakdown
