@@ -1031,10 +1031,23 @@ function createZonePopupContent(features, clickPoint = null) {
         rawData.geofencing_zones = features.map(f => f.properties);
     }
     if (overlappingStations.length > 0) {
-        rawData.station_areas = overlappingStations.map(s => ({
-            station_information: s.station,
-            type: s.type
-        }));
+        // For single station area, show station_information and station_status directly
+        // For multiple, wrap in array
+        if (overlappingStations.length === 1) {
+            const stationInfo = overlappingStations[0];
+            const stationStatus = stationData.find(s => s.station.station_id === stationInfo.station.station_id)?.status;
+            rawData.station_information = stationInfo.station;
+            rawData.station_status = stationStatus || null;
+        } else {
+            rawData.station_areas = overlappingStations.map(s => {
+                const stationStatus = stationData.find(st => st.station.station_id === s.station.station_id)?.status;
+                return {
+                    station_information: s.station,
+                    station_status: stationStatus || null,
+                    type: s.type
+                };
+            });
+        }
     }
     if (hasGlobalRules) {
         rawData.global_rules = globalRules;
