@@ -191,9 +191,17 @@ function createVirtualStationPopup(station, status) {
     if (status) {
         if (status.num_vehicles_available !== undefined) {
             popupContent += `<div><strong>Vehicles Available:</strong> ${status.num_vehicles_available}</div>`;
+            // Add vehicle type breakdown if available
+            if (status.vehicle_types_available) {
+                popupContent += formatVehicleTypesBreakdown(status.vehicle_types_available);
+            }
         }
         if (status.num_docks_available !== undefined) {
             popupContent += `<div><strong>Docks Available:</strong> ${status.num_docks_available}</div>`;
+            // Add dock type breakdown if available
+            if (status.vehicle_docks_available) {
+                popupContent += formatVehicleDocksBreakdown(status.vehicle_docks_available);
+            }
         }
         if (status.is_installed !== undefined) {
             popupContent += `<div><strong>Status:</strong> ${status.is_installed ? 'Installed' : 'Not Installed'}</div>`;
@@ -790,6 +798,22 @@ function createZonePopupContent(features, clickPoint = null) {
                     html += `${stationStatus.num_vehicles_available !== undefined ? ' | ' : ''}Docks: ${stationStatus.num_docks_available} available`;
                 }
                 html += `</div>`;
+
+                // Add vehicle type breakdown if available
+                if (stationStatus.vehicle_types_available) {
+                    const breakdown = formatVehicleTypesBreakdown(stationStatus.vehicle_types_available);
+                    if (breakdown) {
+                        html += breakdown.replace('margin-left: 20px', 'margin-left: 0; margin-top: 2px; font-size: 10px');
+                    }
+                }
+
+                // Add dock type breakdown if available
+                if (stationStatus.vehicle_docks_available) {
+                    const breakdown = formatVehicleDocksBreakdown(stationStatus.vehicle_docks_available);
+                    if (breakdown) {
+                        html += breakdown.replace('margin-left: 20px', 'margin-left: 0; margin-top: 2px; font-size: 10px');
+                    }
+                }
             }
 
             html += `</div>`;
@@ -1225,9 +1249,17 @@ function loadStations(stationInfo, stationStatus) {
             if (status) {
                 if (status.num_vehicles_available !== undefined) {
                     popupContent += `<div><strong>Vehicles Available:</strong> ${status.num_vehicles_available}</div>`;
+                    // Add vehicle type breakdown if available
+                    if (status.vehicle_types_available) {
+                        popupContent += formatVehicleTypesBreakdown(status.vehicle_types_available);
+                    }
                 }
                 if (status.num_docks_available !== undefined) {
                     popupContent += `<div><strong>Docks Available:</strong> ${status.num_docks_available}</div>`;
+                    // Add dock type breakdown if available
+                    if (status.vehicle_docks_available) {
+                        popupContent += formatVehicleDocksBreakdown(status.vehicle_docks_available);
+                    }
                 }
                 if (status.is_installed !== undefined) {
                     popupContent += `<div><strong>Status:</strong> ${status.is_installed ? 'Installed' : 'Not Installed'}</div>`;
@@ -1898,6 +1930,63 @@ function getVehicleTypeName(vehicleTypeId) {
             return `${typeDescription}${pricingInfo}`;
         }
     }
+}
+
+// Format vehicle types available as inline breakdown
+function formatVehicleTypesBreakdown(vehicleTypesAvailable) {
+    if (!vehicleTypesAvailable || vehicleTypesAvailable.length === 0) {
+        return '';
+    }
+
+    // Filter to only types with count > 0
+    const availableTypes = vehicleTypesAvailable.filter(vt => vt.count > 0);
+
+    if (availableTypes.length === 0) {
+        return '';
+    }
+
+    // Format as: "Type1 (5) • Type2 (3) • Type3 (2)"
+    const parts = availableTypes.map(vt => {
+        const typeName = getVehicleTypeName(vt.vehicle_type_id);
+        // Extract just the name part (before any parentheses with metadata)
+        const cleanName = typeName.split('(')[0].trim();
+        return `${cleanName} (${vt.count})`;
+    });
+
+    return `<div style="margin-left: 20px; color: #666; font-size: 0.9em;">${parts.join(' • ')}</div>`;
+}
+
+// Format vehicle docks available as inline breakdown
+function formatVehicleDocksBreakdown(vehicleDocksAvailable) {
+    if (!vehicleDocksAvailable || vehicleDocksAvailable.length === 0) {
+        return '';
+    }
+
+    // Filter to only docks with count > 0
+    const availableDocks = vehicleDocksAvailable.filter(vd => vd.count > 0);
+
+    if (availableDocks.length === 0) {
+        return '';
+    }
+
+    // Format as: "Type1 docks (6) • Type2 docks (4)"
+    const parts = availableDocks.map(vd => {
+        // vd.vehicle_type_ids is an array of type IDs that can use these docks
+        if (vd.vehicle_type_ids.length === 1) {
+            const typeName = getVehicleTypeName(vd.vehicle_type_ids[0]);
+            const cleanName = typeName.split('(')[0].trim();
+            return `${cleanName} docks (${vd.count})`;
+        } else {
+            // Multiple types can use these docks
+            const typeNames = vd.vehicle_type_ids.map(id => {
+                const name = getVehicleTypeName(id);
+                return name.split('(')[0].trim();
+            }).join('/');
+            return `${typeNames} docks (${vd.count})`;
+        }
+    });
+
+    return `<div style="margin-left: 20px; color: #666; font-size: 0.9em;">${parts.join(' • ')}</div>`;
 }
 
 // Update system information display
