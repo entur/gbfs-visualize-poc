@@ -826,19 +826,19 @@ function createZonePopupContent(features, clickPoint = null) {
             html += `</div>`;
         });
 
-        // Show precedence explanation with availability considerations
-        html += `<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 8px; margin-bottom: 15px; font-size: 12px;">`;
-        html += `<div style="font-weight: bold; color: #856404; margin-bottom: 4px;">⚠️ Station Area Precedence Rules</div>`;
-        html += `<div style="color: #856404;">`;
-        html += `Station areas override geofencing zone start/end rules <strong>only when vehicles/capacity are available</strong>:<br>`;
-        html += `• <strong>Ride Start:</strong> Station area allows starting IF vehicles are available<br>`;
-        html += `• <strong>Ride End:</strong> Station area allows ending IF docking capacity exists<br>`;
-        html += `• <strong>Other rules:</strong> Zone rules for ride-through, speed limits, and parking still apply`;
-        html += `</div>`;
-        html += `</div>`;
-
-        // Add separator if there are also zones
+        // Only show precedence explanation if there are actual geofencing zones
         if (features.length > 0 || hasGlobalRules) {
+            html += `<div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 8px; margin-bottom: 15px; font-size: 12px;">`;
+            html += `<div style="font-weight: bold; color: #856404; margin-bottom: 4px;">⚠️ Station Area Precedence Rules</div>`;
+            html += `<div style="color: #856404;">`;
+            html += `Station areas override geofencing zone start/end rules <strong>only when vehicles/capacity are available</strong>:<br>`;
+            html += `• <strong>Ride Start:</strong> Station area allows starting IF vehicles are available<br>`;
+            html += `• <strong>Ride End:</strong> Station area allows ending IF docking capacity exists<br>`;
+            html += `• <strong>Other rules:</strong> Zone rules for ride-through, speed limits, and parking still apply`;
+            html += `</div>`;
+            html += `</div>`;
+
+            // Add separator if there are also zones
             html += `<div style="border-top: 2px solid #dee2e6; margin: 15px 0; padding-top: 15px;">`;
             html += `<h5 style="color: #6c757d; font-size: 13px; margin: 0 0 10px 0;">📍 Underlying Geofencing Zones:</h5>`;
             html += `<div style="font-size: 11px; color: #6c757d; margin-bottom: 10px; font-style: italic;">`;
@@ -906,7 +906,7 @@ function createZonePopupContent(features, clickPoint = null) {
     } else if (features.length === 1 && !hasGlobalRules && overlappingStations.length === 0) {
         // Single zone, no global rules, no station areas - use simple display
         html += createZoneInfo(features[0], overlappingStations);
-    } else {
+    } else if (features.length > 0) {
         // Multiple zones OR single zone with global rules - use precedence analysis
         if (features.length > 1) {
             html += `<h4 style="color: #ff6b6b;">⚠ ${features.length} Overlapping Zones</h4>`;
@@ -984,10 +984,23 @@ function createZonePopupContent(features, clickPoint = null) {
             html += `</div>`;
         }
 
-        // Show all zones for reference
+        // Show all zones for reference - collapsible
+        const zonesId = 'zones-' + Math.random().toString(36).substr(2, 9);
         html += `<div style="border-top: 1px solid #dee2e6; padding-top: 15px;">`;
-        html += `<h5 style="margin: 0 0 10px 0; color: #495057; font-size: 14px;">All Overlapping Zones:</h5>`;
-        html += `<div style="max-height: 300px; overflow-y: auto;">`;
+        html += `<div style="cursor: pointer; user-select: none; font-weight: 500; font-size: 14px; color: #495057;" onclick="
+            const content = document.getElementById('${zonesId}');
+            const arrow = this.querySelector('.arrow');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                arrow.textContent = '▼';
+            } else {
+                content.style.display = 'none';
+                arrow.textContent = '▶';
+            }
+        ">
+            <span class="arrow">▶</span> All Overlapping Zones (${features.length})
+        </div>`;
+        html += `<div id="${zonesId}" style="display: none; margin-top: 10px;">`;
 
         features.forEach((feature, index) => {
             if (index > 0) {
@@ -2021,7 +2034,7 @@ function createRawDataSection(data, label = 'Raw GBFS Data') {
             ">
                 <span class="arrow">▶</span> ${label}
             </div>
-            <div id="${id}" style="display: none; margin-top: 8px; max-height: 300px; overflow: auto; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 8px;">
+            <div id="${id}" style="display: none; margin-top: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 8px;">
                 <pre style="margin: 0; font-size: 10px; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word;">${syntaxHighlightJSON(data)}</pre>
             </div>
         </div>
