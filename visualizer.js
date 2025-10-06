@@ -2128,7 +2128,8 @@ function updateStats(counts) {
     }
 
     if (counts.vehicles !== undefined) {
-        html += `<div class="info-row"><span class="info-label">Vehicles:</span><span class="info-value">${counts.vehicles}</span></div>`;
+        const vehicleCount = typeof counts.vehicles === 'object' ? counts.vehicles.total : counts.vehicles;
+        html += `<div class="info-row"><span class="info-label">Vehicles:</span><span class="info-value">${vehicleCount}</span></div>`;
     }
 
     if (counts.zones !== undefined) {
