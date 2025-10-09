@@ -541,9 +541,9 @@ function getZoneColor(rules) {
         return { color: '#f44336', fillColor: 'rgba(244, 67, 54, 0.3)' };
     }
 
-    // Partial restriction zones (can ride through but can't start and/or end)
-    if ((!rule.ride_start_allowed || !rule.ride_end_allowed) && rule.ride_through_allowed) {
-        return { color: '#9C27B0', fillColor: 'rgba(156, 39, 176, 0.3)' };
+    // Any partial restriction zones (any combination except all three forbidden)
+    if (!rule.ride_start_allowed || !rule.ride_end_allowed || !rule.ride_through_allowed) {
+        return { color: '#9C27B0', fillColor: 'rgba(156, 39, 176, 0.3)' }; // Purple
     }
 
     // Station parking required
